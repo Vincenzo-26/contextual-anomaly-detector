@@ -2,6 +2,7 @@ from typing import Union
 
 import logging
 import pandas as pd
+import os
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics import silhouette_score
 
@@ -61,14 +62,25 @@ def run_clustering(data: pd.DataFrame, df_holidays: Union[None, pd.DataFrame]) -
     wd_daily_matrix['Cluster'] = final_labels
 
     # Grouping clusters
-    group_cluster = pd.DataFrame({'timestamp': pd.to_datetime(data['date'].unique())})
-    group_cluster['Cluster_1'] = group_cluster['timestamp'].dt.date.isin(Cluster1['date'])
-    group_cluster['Cluster_2'] = group_cluster['timestamp'].dt.date.isin(Cluster2['date'])
+    group_cluster_df = pd.DataFrame({'timestamp': pd.to_datetime(data['date'].unique())})
+    group_cluster_df['Cluster_1'] = group_cluster_df['timestamp'].dt.date.isin(Cluster1['date'])
+    group_cluster_df['Cluster_2'] = group_cluster_df['timestamp'].dt.date.isin(Cluster2['date'])
     for i in range(3, optimal_clusters + 3):
-        group_cluster[f'Cluster_{i}'] = group_cluster['timestamp'].dt.date.isin(
+        group_cluster_df[f'Cluster_{i}'] = group_cluster_df['timestamp'].dt.date.isin(
             wd_daily_matrix[wd_daily_matrix['Cluster'] == i].index
         )
 
-    logging.info(f"📊 Clustering algorithm completed successfully. Final number of cluster: {optimal_clusters + 2}")
+    # Creating csv
+    file_path = os.path.join(os.path.dirname(__file__), 'data', 'group_cluster_new.csv')
+    group_cluster_df.to_csv(file_path, index=False)
 
-    return group_cluster
+    logging.info(f"📊 Clustering algorithm completed successfully. Final number of cluster: {optimal_clusters + 2}")
+    return group_cluster_df
+
+
+if __name__ == '__main__':
+    from utils import download_data, process_data
+    data_path = 'data/data.csv'
+    data = download_data(data_path)
+    df, obs_per_day, obs_per_hour = process_data(data, "Total_Power")
+    run_clustering(df, None)

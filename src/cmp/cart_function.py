@@ -1,5 +1,6 @@
 import pandas as pd
 from sklearn.tree import DecisionTreeRegressor, _tree
+import os
 import numpy as np
 import logging
 
@@ -103,4 +104,15 @@ def run_cart(data: pd.DataFrame) -> pd.DataFrame:
             min_samples_leaf += 500
     n_iterations += 1
 
+    # Creating csv
+    file_path = os.path.join(os.path.dirname(__file__), 'data', 'time_windows_new.csv')
+    time_windows.to_csv(file_path, index=False)
+
     return time_windows
+
+if __name__ == '__main__':
+    from utils import download_data, process_data
+    data_path = 'data/data.csv'
+    data = download_data(data_path)
+    df, obs_per_day, obs_per_hour = process_data(data, "Total_Power")
+    run_cart(df)
