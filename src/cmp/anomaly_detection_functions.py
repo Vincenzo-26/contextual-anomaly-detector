@@ -140,8 +140,14 @@ def elbow_fun(group, vector_ad):
     plt.plot(yy)
     plt.ylabel("Anomaly Score")
     plt.title("Sorted Anomaly Scores")
-    plt.axvline(num_anomalies_to_show, ls=":", c="gray")
-    anomaly_ticks = list(range(0, vector_ad.size, int(vector_ad.size / 5)))
+
+    if num_anomalies_to_show is not None:
+        plt.axvline(num_anomalies_to_show, ls=":", c="gray")
+    else:
+        num_anomalies_to_show = 0
+
+    step = int(vector_ad.size / 5) if int(vector_ad.size / 5) > 0 else 1
+    anomaly_ticks = list(range(0, vector_ad.size, step))
     anomaly_ticks.append(num_anomalies_to_show)
     plt.xticks(anomaly_ticks)
     plt.close('all')
@@ -189,6 +195,9 @@ def gesd_esd_test(input_series, max_outliers, alpha=0.05):
     :return n_outliers: number of outliers found
     :rtype n_outliers: int
     """
+    if input_series.size == 0:
+        return 0
+
 
     stats_1 = []
     n_outliers = 0
@@ -198,7 +207,11 @@ def gesd_esd_test(input_series, max_outliers, alpha=0.05):
 
         # Calculates the statistical test Ri = max_i*(x_i-x_bar)/sts_dv(x_i)
         max_ind = np.argmax(abs(input_series - np.mean(input_series)))
-        r_i = max(abs(input_series - np.mean(input_series))) / np.std(input_series)
+        std_val = np.std(input_series)
+        if std_val == 0:
+            r_i = np.nan
+        else:
+            r_i = max(abs(input_series - np.mean(input_series))) / std_val
 
         # print('Test {}'.format(iteration))
         # print("Test Statistics Value(R{}) : {}".format(iteration, r_i))
@@ -221,13 +234,16 @@ def gesd_esd_test(input_series, max_outliers, alpha=0.05):
         #         '{} is not an outlier. R{}> λ{}: {:.4f} > {:.4f} \n'.format(input_series[max_ind], i,
         #                                                                     i, r_i, lambda_i))
 
-        input_series = np.delete(input_series, max_ind)
+        # input_series = np.delete(input_series, max_ind)
+
         critical_values.append(lambda_i)
         stats_1.append(r_i)
         # The number of outliers is determined by finding the largest i such that Ri > lambda_i.
         if r_i > lambda_i:
             n_outliers = i
-
+        input_series = np.delete(input_series, max_ind)
+        if input_series.size == 0:
+            break
     # print('H0:  there are no outliers in the data')
     # print('Ha:  there are up to 10 outliers in the data')
     # print('')

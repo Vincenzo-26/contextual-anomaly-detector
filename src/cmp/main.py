@@ -5,10 +5,10 @@
 import argparse
 import datetime
 from statistics import mean
-
+import numpy as np
 import plotly.express as px
 from scipy.stats import zscore
-
+import pickle
 from src.cmp.anomaly_detection_functions import anomaly_detection, extract_vector_ad_temperature, \
     extract_vector_ad_energy, extract_vector_ad_cmp
 from src.cmp.utils import *
@@ -25,15 +25,34 @@ if __name__ == '__main__':
     logger = logging.getLogger(__name__)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s](%(name)s) %(message)s')
 
+    # TODO: scommentare il codice per farlo runnare da terminale ed eliminare la parte inferiore
     # setup argument parser
-    parser = argparse.ArgumentParser(
-        prog='Matrix profile CLI',
-        description='Matrix profile')
-    parser.add_argument('input_file', help='Path to file', type=str)
-    parser.add_argument('variable_name', help='Variable name', type=str)
-    parser.add_argument('output_file', help='Path to the output file', type=str, default=None)
-    parser.add_argument('-country', help='The country code as defined by https://pypi.org/project/holidays/', type=str)
-    args = parser.parse_args()
+    # parser = argparse.ArgumentParser(
+    #     prog='Matrix profile CLI',
+    #     description='Matrix profile')
+    # parser.add_argument('input_file', help='Path to file', type=str)
+    # parser.add_argument('variable_name', help='Variable name', type=str)
+    # parser.add_argument('output_file', help='Path to the output file', type=str, default=None)
+    # parser.add_argument('-country', help='The country code as defined by https://pypi.org/project/holidays/', type=str)
+    # args = parser.parse_args()
+    variable_name = "el_UTA_3_3B_7"
+
+    if (variable_name.startswith("el_UTA_") or (variable_name == "total_power") or (variable_name == "el_pompe")):
+        input_file_raw = "data/Aule_R/el_aule_R/data_el_aule_R.csv"
+        input_file_T_ext = "data/Aule_R/raw_data/T_ext_aule_R.csv"
+        dataformat(input_file_raw, variable_name, input_file_T_ext)
+    elif variable_name.startswith("T_"):
+        input_file_raw = f"data/Aule_R/raw_data/raw_aula_R{variable_name.split("_")[2]}.csv"
+        dataformat_var(input_file_raw, variable_name)
+
+    input_file = "data/Aule_R/data_aule_R.csv"
+
+    # per aule R allora input_file deve essere quello del fd creato in dataformat, altrimenti basta mettere quello di data
+    # variable_name = "Total_Power"
+    # input_file = "data/data.csv"
+
+    output_file = "results/reports/report.html"
+    country = None
 
     ########################################################################################
     # define a begin time to evaluate execution time & performance of algorithm
@@ -47,13 +66,15 @@ if __name__ == '__main__':
         'contexts': []
     }
 
-    logger.info(f"Arguments: {args}")
+    # TODO: scommentare il codice per farlo runnare da terminale
+    # logger.info(f"Arguments: {args}")
 
-    raw_data = download_data(args.input_file)
-    data, obs_per_day, obs_per_hour = process_data(raw_data, args.variable_name)
+    raw_data = download_data(input_file)
+    # PRE-PROCESSING DEI DATI
+    data, obs_per_day, obs_per_hour = process_data(raw_data, variable_name)
 
-    if args.country is not None:
-        df_holidays = extract_holidays(data, args.country)
+    if country is not None:
+        df_holidays = extract_holidays(data, country)
         df_holidays_dates = pd.to_datetime(df_holidays.index).date
         data_no_holidays = data[~np.isin(data.index.date, df_holidays)]
         string_holidays = ""
@@ -98,6 +119,9 @@ if __name__ == '__main__':
         cluster_data_plot = cluster_data_plot.assign(
             cluster=lambda x: np.where(x['date'].isin(dates_plot), f'Cluster_{cluster_id + 1}', x['cluster'])
         )
+    cluster_data_plot.to_csv("cluster_data.csv", index=False)
+    cluster_data_plot.to_csv(f"data/diagnosis/cluster_data.csv", index = False)
+
 
     fig = px.line(cluster_data_plot, x='time', y='value', line_group='date', facet_col='cluster', color='cluster')
     # use viridis palette
@@ -248,8 +272,7 @@ if __name__ == '__main__':
             group_name = group_df.columns[id_cluster]
 
             # add column of context of group in df_output
-            df_anomaly_context[f'{group_name}.{context_string_small}'] = [0 for id_cluster in
-                                                                          range(len(df_anomaly_context))]
+            df_anomaly_context[f'{group_name}.{context_string_small}'] = [0 for id_cluster in range(len(df_anomaly_context))]
 
             # create empty group vector
             group = np.array(group_df.T)[id_cluster]
@@ -261,21 +284,16 @@ if __name__ == '__main__':
             group_dates = data.index[::obs_per_day].values[group]
 
             # save group CMP for R plot
-            np.savetxt(os.path.join(path_to_data, context_string_small, f'plot_cmp_{group_name}.csv'),
-                       nan_diag(group_cmp), delimiter=",")
+            np.savetxt(os.path.join(path_to_data, context_string_small, f'plot_cmp_{group_name}.csv'),nan_diag(group_cmp), delimiter=",")
 
             # Save CMP for R plot (use to_csv)
-            np.savetxt(os.path.join(path_to_data, context_string_small, f'match_index_query_{group_name}.csv'),
-                       cmp.match_index_query[:, group][group, :], delimiter=",")
+            np.savetxt(os.path.join(path_to_data, context_string_small, f'match_index_query_{group_name}.csv'),cmp.match_index_query[:, group][group, :], delimiter=",")
 
             # Save CMP for R plot (use to_csv)
-            np.savetxt(os.path.join(path_to_data, context_string_small, f'match_index_series_{group_name}.csv'),
-                       cmp.match_index_series[:, group][group, :], delimiter=",")
+            np.savetxt(os.path.join(path_to_data, context_string_small, f'match_index_series_{group_name}.csv'),cmp.match_index_series[:, group][group, :], delimiter=",")
 
             # plot cluster matrix
-            fig = px.imshow(group_cmp, zmin=val_min, zmax=round(val_max),
-                            labels=dict(color="Distance"),
-                            x=group_dates, y=group_dates)
+            fig = px.imshow(group_cmp, zmin=val_min, zmax=round(val_max),labels=dict(color="Distance"),x=group_dates, y=group_dates)
             fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
 
             #######################################
@@ -333,6 +351,10 @@ if __name__ == '__main__':
             anomalies_table["Date"] = cmp_ad_score_dates
             anomalies_table["Anomaly Score"] = cmp_ad_score[cmp_ad_score_index]
             anomalies_table["Rank"] = anomalies_table.index + 1
+
+            anomalies_table["Context"] = id_tw + 1
+            anomalies_table["Cluster"] = id_cluster + 1
+
             anomalies_table_overall = pd.concat([anomalies_table_overall, anomalies_table])
             # the number of anomalies is the number of non nan elements, count
             num_anomalies_to_show = np.count_nonzero(~np.isnan(cmp_ad_score))
@@ -440,6 +462,7 @@ if __name__ == '__main__':
             # remove redundant columns
             df_anomaly_results = df_anomaly_results.loc[:, ~df_anomaly_results.columns.duplicated()]
 
+    anomalies_table_overall.to_csv("data/diagnosis/anomalies_table_overall.csv", index = False)
     print('\n*********************\n')
     # at the end of loop on context save dataframe of results
     df_anomaly_results.to_csv(os.path.join(path_to_data, "anomaly_results.csv"))
@@ -447,7 +470,7 @@ if __name__ == '__main__':
 
     # print summary with anomalies
     # print dataset main characteristics
-    summary = f'''The dataset under analysis refers to the variable '<strong>{args.variable_name}</strong>':
+    summary = f'''The dataset under analysis refers to the variable '<strong>{variable_name}</strong>':
                     <ul>
                       <li>From: {data.index[0]}</li>
                       <li>To: {data.index[len(data) - 1]}</li>
@@ -503,4 +526,4 @@ if __name__ == '__main__':
     minutes, seconds = divmod(remainder, 60)
     logger.info(f"TOTAL {str(int(minutes))} min {str(int(seconds))} s")
 
-    save_report(report_content, args.output_file)
+    save_report(report_content, output_file)

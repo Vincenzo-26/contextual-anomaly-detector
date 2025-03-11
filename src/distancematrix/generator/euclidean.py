@@ -142,7 +142,7 @@ class BoundStreamingEuclidean(AbstractBoundStreamingGenerator):
         self.prev_calc_column_sq_dist = sq_dist
         self.prev_calc_column_index = column
 
-        return np.sqrt(sq_dist)
+        return np.sqrt(np.maximum(sq_dist, 0))
 
 
 def _euclidean_distance_squared(series, sequence):

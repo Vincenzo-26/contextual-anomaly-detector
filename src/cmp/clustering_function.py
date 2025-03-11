@@ -49,7 +49,7 @@ def run_clustering(data: pd.DataFrame, df_holidays: Union[None, pd.DataFrame]) -
     df_working_days = data[~data['date'].isin(set(Cluster1['date']).union(set(Cluster2['date'])))][
         ['value', 'date', 'time']]
     wd_daily_matrix = df_working_days.pivot(index='date', columns='time', values='value')
-    range_clusters = range(3, 7)
+    range_clusters = range(3, 5)
     silhouette_scores = []
     for n_clusters in range_clusters:
         clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward')

@@ -28,7 +28,7 @@ def run_cart(data: pd.DataFrame) -> pd.DataFrame:
     data['date'] = data.index.date
     data['time'] = data.index.time
     working_days_df = data[~data.index.weekday.isin([5, 6])]
-    working_days_df = working_days_df.drop(columns=['temp'])
+    # working_days_df = working_days_df.drop(columns=['temp'])
     working_days_df['time_numeric'] = working_days_df['time'].apply(lambda x: x.hour + x.minute / 60)
 
     # Defining X and y for the CART
@@ -105,9 +105,9 @@ def run_cart(data: pd.DataFrame) -> pd.DataFrame:
     n_iterations += 1
 
     # Creating csv
-    file_path = os.path.join(os.path.dirname(__file__), 'data', 'time_windows_new.csv')
+    file_path = os.path.join(os.path.dirname(__file__), 'data', 'diagnosis', 'time_windows.csv')
     time_windows.to_csv(file_path, index=False)
-
+    logging.info(f"📊 Cart algorithm completed successfully. Final number of time windows: {len(time_windows)}")
     return time_windows
 
 if __name__ == '__main__':

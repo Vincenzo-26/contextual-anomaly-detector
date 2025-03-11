@@ -32,7 +32,89 @@ line_size = 1
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s](%(name)s) %(message)s')
 
+def dataformat(filepath, var, filepath_T_ext):
 
+    #composizione del dataset con la variabile e la temperatura
+    df = pd.read_csv(filepath)
+    df_var = pd.read_csv(filepath_T_ext)
+    df.rename(columns={'Time': 'timestamp'}, inplace=True)
+    if var == "total_power":
+        df[f'{var}'] = df.drop(columns=['timestamp']).sum(axis=1)
+        df = df[['timestamp', f'{var}']]
+    if var == "el_pompe":
+        df.rename(columns={'QE Pompe': f'{var}'}, inplace=True)
+        df = df[['timestamp', f'{var}']]
+    if var.startswith("el_UTA_"):
+        aule_fed = '_'.join(var.split('_')[2:])
+        aule_slash = '/'.join(var.split('_')[2:])
+        df.rename(columns={f'QE UTA {aule_slash}': f'el_UTA_{aule_fed}'}, inplace=True)
+        df = df[['timestamp', f'el_UTA_{aule_fed}']]
+    df['temp'] = df_var['Temperatura Esterna']
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    # per fare iniziare il df da mezzanotte e finire alle 23:45 altrimenti il clustering ha problemi con i nan nel pivot quindi si elimina il giorno incompleto dal df
+    first_ts = pd.to_datetime(df.iloc[0]['timestamp'])
+    if first_ts.time() != pd.Timestamp("00:00:00").time():
+        first_day = first_ts.date()
+        df = df[df['timestamp'].dt.date != first_day]
+
+    last_ts = pd.to_datetime(df.iloc[-1]['timestamp'])
+    if last_ts.time() != pd.Timestamp("23:45:00").time():
+        last_day = last_ts.date()
+        df = df[df['timestamp'].dt.date != last_day]
+
+    df.set_index('timestamp', inplace=True)
+    # perchè a volte duplica i timestamp
+    df = df[~df.index.duplicated(keep='first')]
+    # Perchè nei df a volte non ci sono tutti i time step e dà problemi nel pivot del clustering
+    full_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq='15min')
+    df = df.reindex(full_range)
+    df.index.name = 'timestamp'
+    df.interpolate(method='linear', inplace=True)
+    df.reset_index(inplace=True)
+    df.to_csv("data/Aule_R/data_aule_R.csv", index=False)
+
+
+def dataformat_var(filepath, var):
+    # composizione del dataset con la variabile e la temperatura
+    df = pd.read_csv(filepath)
+    aula = var.split("_")[2]
+    df.rename(columns={'Time': 'timestamp'}, inplace=True)
+    df.rename(columns={'Setpoint Effettivo': f'T_setpoint_{aula}'}, inplace=True)
+    if ('Temperatura Ambiente Z1-Basso' in df.columns) and ('Temperatura Ambiente Z2-Alto' in df.columns):
+        df[f'T_amb_{aula}'] = df[['Temperatura Ambiente Z1-Basso', 'Temperatura Ambiente Z2-Alto']].mean(axis=1)
+        df.drop(columns=['Temperatura Ambiente Z1-Basso', 'Temperatura Ambiente Z2-Alto'], inplace=True)
+    else:
+        df.rename(columns={'Temperatura Ambiente': f'T_amb_{aula}'}, inplace=True)
+    df.rename(columns={'Temperatura Esterna': 'temp'}, inplace=True)
+    df = df[['timestamp', f'{var}', 'temp']]
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    # per fare iniziare il df da mezzanotte e finire alle 23:45 altrimenti il clustering ha problemi con i nan nel pivot quindi si elimina il giorno incompleto dal df
+    first_ts = pd.to_datetime(df.iloc[0]['timestamp'])
+    if first_ts.time() != pd.Timestamp("00:00:00").time():
+        first_day = first_ts.date()
+        df = df[df['timestamp'].dt.date != first_day]
+
+    last_ts = pd.to_datetime(df.iloc[-1]['timestamp'])
+    if last_ts.time() != pd.Timestamp("23:45:00").time():
+        last_day = last_ts.date()
+        df = df[df['timestamp'].dt.date != last_day]
+
+    df.set_index('timestamp', inplace=True)
+    # perchè a volte duplica i timestamp
+    df = df[~df.index.duplicated(keep='first')]
+    # Perchè nei df a volte non ci sono tutti i time step e dà problemi nel pivot del clustering
+    full_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq='15min')
+    df = df.reindex(full_range)
+    df.index.name = 'timestamp'
+    df.interpolate(method='linear', inplace=True)
+    df.reset_index(inplace=True)
+    df.to_csv("data/Aule_R/data_aule_R.csv", index=False)
+
+def time_to_float(time_str):
+    hours, minutes = map(int, time_str.split(":"))
+    return hours + minutes / 60
 def calculate_time_windows():
     """
     Calculate the time windows for the contextual matrix profile
