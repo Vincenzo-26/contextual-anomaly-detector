@@ -38,14 +38,14 @@ if __name__ == '__main__':
     variable_name = "el_UTA_3_3B_7"
 
     if (variable_name.startswith("el_UTA_") or (variable_name == "total_power") or (variable_name == "el_pompe")):
-        input_file_raw = "data/Aule_R/el_aule_R/data_el_aule_R.csv"
+        input_file_raw = "data/Aule_R/raw_data/electric_data_raw/data_el_aule_R.csv"
         input_file_T_ext = "data/Aule_R/raw_data/T_ext_aule_R.csv"
         dataformat(input_file_raw, variable_name, input_file_T_ext)
     elif variable_name.startswith("T_"):
         input_file_raw = f"data/Aule_R/raw_data/raw_aula_R{variable_name.split("_")[2]}.csv"
         dataformat_var(input_file_raw, variable_name)
 
-    input_file = "data/Aule_R/data_aule_R.csv"
+    input_file = "data/Aule_R/preprocess_data/electric_data/el_data_prep.csv"
 
     # per aule R allora input_file deve essere quello del fd creato in dataformat, altrimenti basta mettere quello di data
     # variable_name = "Total_Power"
@@ -526,4 +526,6 @@ if __name__ == '__main__':
     minutes, seconds = divmod(remainder, 60)
     logger.info(f"TOTAL {str(int(minutes))} min {str(int(seconds))} s")
 
-    save_report(report_content, output_file)
+    # la funzione originale save_report non ha il terzo argomento in input ma viene specificato direttamente nella
+    #creazione della funzione. Così però si può usare per la generazione di più report
+    save_report(report_content, output_file, "cmp.html")

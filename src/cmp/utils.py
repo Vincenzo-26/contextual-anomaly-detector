@@ -72,7 +72,7 @@ def dataformat(filepath, var, filepath_T_ext):
     df.index.name = 'timestamp'
     df.interpolate(method='linear', inplace=True)
     df.reset_index(inplace=True)
-    df.to_csv("data/Aule_R/data_aule_R.csv", index=False)
+    df.to_csv("data/Aule_R/preprocess_data/electric_data/el_data_prep.csv", index=False)
 
 
 def dataformat_var(filepath, var):
@@ -110,7 +110,7 @@ def dataformat_var(filepath, var):
     df.index.name = 'timestamp'
     df.interpolate(method='linear', inplace=True)
     df.reset_index(inplace=True)
-    df.to_csv("data/Aule_R/data_aule_R.csv", index=False)
+    df.to_csv("data/Aule_R/el_data_prep.csv", index=False)
 
 def time_to_float(time_str):
     hours, minutes = map(int, time_str.split(":"))
@@ -124,7 +124,7 @@ def calculate_time_windows():
     return df
 
 
-def save_report(context, filepath: str) -> None:
+def save_report(context, filepath: str, template: str) -> None:
     """Save the report to a file
 
     :param context: context of the report
@@ -133,7 +133,7 @@ def save_report(context, filepath: str) -> None:
     """
     # Set up the Jinja2 environment for report
     env = Environment(loader=FileSystemLoader(path_to_templates))
-    template = env.get_template('cmp.html')
+    template = env.get_template(template)
 
     # Render the template with the data
     html_content = template.render(context)
