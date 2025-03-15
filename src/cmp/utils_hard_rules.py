@@ -58,6 +58,10 @@ def preprocess(df, df_temp):
     return df
 
 def preprocess_variabili_interne(var):
+    """
+    Fa un dizionario avente i dataframe delle variabili associate alle varie aule.
+    Le chiavi sono df_{aula}
+    """
     dfs_dict = {}
     aule = var.split("_") [2:]
     for aula in aule:
@@ -125,3 +129,34 @@ def time_to_float(t):
         raise ValueError("L'input non ha un formato riconosciuto (manca 'hour' o 'minute').")
 
     return t.hour + t.minute / 60
+
+def merge_anomaly_tables(df_tot, df_new):
+    key_cols = ["date", "Context", "Cluster"]
+    if df_tot.empty:
+        return df_new.copy()
+    # Impostiamo le chiavi come indice
+    df_tot = df_tot.set_index(key_cols)
+    df_new = df_new.set_index(key_cols)
+    for idx, new_row in df_new.iterrows():
+        if idx in df_tot.index:
+            # Se la riga esiste, aggiorna le colonne aggiungendo quelle della nuova variabile;
+            # nel caso di "t_ext", se già presente (valore diverso da 0) non si aggiorna.
+            for col in new_row.index:
+                if col in df_tot.columns:
+                    if col == "t_ext" and df_tot.loc[idx, col] != 0:
+                        continue
+                    else:
+                        df_tot.loc[idx, col] = new_row[col]
+                else:
+                    df_tot.loc[idx, col] = new_row[col]
+        else:
+            # Se la tripla non esiste, crea una nuova riga;
+            # per le colonne già presenti in df_tot che non sono indicate in new_row assegna 0.
+            new_full = {col: 0 for col in df_tot.columns}
+            for col in new_row.index:
+                new_full[col] = new_row[col]
+            df_tot.loc[idx] = new_full
+    # Ripristiniamo l'indice e assegniamo 0 ai NaN
+    df_tot = df_tot.reset_index()
+    df_tot.fillna(0, inplace=True)
+    return df_tot

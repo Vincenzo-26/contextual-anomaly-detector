@@ -1,11 +1,17 @@
 import webbrowser
+
+import pandas as pd
+
 from src.cmp.utils_hard_rules import *
 from src.cmp.utils import *
 import plotly.graph_objects as go
 import datetime
 # dataframe con i carici elettrici
 
+# var = "el_UTA_1_1B_5"
+# var = "el_UTA_2_2B_6"
 var = "el_UTA_3_3B_7"
+# var = "el_UTA_4_4B_8"
 
 data_el_prep = pd.read_csv(f'data/Aule_R/preprocess_data/electric_data/el_data_prep.csv')
 data_el_prep['timestamp'] = pd.to_datetime(data_el_prep['timestamp'])
@@ -16,13 +22,19 @@ df_tw = pd.read_csv("data/diagnosis/time_windows.csv") # dataframe con le tw
 df_ctx = pd.read_csv("data/contexts.csv") # dataframe con i contesti
 df_cluster = pd.read_csv("data/diagnosis/cluster_data.csv") # dataframe con i cluster associati ai timestep
 
-anm_table_var = pd.read_csv(f'data/diagnosis/anomalies_table_var/final_anomalies_{var}.csv') # dataframe con le anomalie delle variabili interne
+anm_table_var = pd.read_csv(f'data/diagnosis/anomalies_table_var/anomalies_var_table_overall.csv') # dataframe con le anomalie delle variabili interne
 anm_table_el = pd.read_csv(f'data/diagnosis/anomalies_table_overall.csv') # dataframe con le anomalie elettiche
-date_anomale_el = set(anm_table_el['Date']) # date anomale elettriche identificate da CMP
-anm_table_var['anm_el'] = anm_table_var['date'].isin(date_anomale_el)
-anm_table_var.to_csv("data/diagnosis/anomalies_table_var/anm_table_var.csv", index=False) # dataframe dove vengono evidenziate le date anomale contemporaneamente del carico elettrico e di almeno una variabile
+
+set_el = set(anm_table_el[['Date', 'Context', 'Cluster']].apply(tuple, axis=1))
+
+# dataframe dove vengono evidenziate le date anomale contemporaneamente del carico elettrico e di almeno una variabile per
+# datra, contesto e cluster
+anm_table_var['anm_el'] = anm_table_var[['date', 'Context', 'Cluster']].apply(
+    lambda row: tuple(row) in set_el, axis=1
+)
+
 anm_el_and_var = anm_table_var[anm_table_var['anm_el']]
-anm_el_and_var.to_csv("data/diagnosis/anomalies_table_var/anm_el_and_var.csv", index=False)
+anm_el_and_var.to_csv(f"data/diagnosis/anomalies_table_var/anomalies_el_&_var_table_overall.csv", index=False)
 
 
 report_content = {
@@ -177,11 +189,28 @@ for index, row in anm_el_and_var.iterrows():
         else:
             continue
 
-output_file = f"results/reports/report_anm_var.html"
+output_file = f"results/reports/report_{var}.html"
 save_report(report_content, output_file, "template_var.html")
 absolute_path = os.path.abspath(output_file)
 webbrowser.open_new_tab(f'file://{absolute_path}')
 
+# tabella delle probabilità
+prob_fault = 0.9
+prob_no_fault = 0.1
+
+anm_el_and_var = anm_el_and_var.drop(columns=["anm_el"])
+
+anm_el_and_var = anm_el_and_var.rename(columns={"date": "Date"})
+var_columns = list(anm_el_and_var.columns)[3:]
+
+probability_table = anm_table_el[["Date", "Context", "Cluster"]].copy()
+merged_table = pd.merge(probability_table, anm_el_and_var, on=["Date", "Context", "Cluster"], how="left")
+
+#    Se per la combinazione (Date, Context, Cluster) non è presente (NaN) =>  prob_no_fault (0.1)
+#    - Se il valore è 1 =>  prob_fault (0.9)
+for col in var_columns:
+    probability_table[col] = merged_table[col].apply(lambda x: prob_fault if x == 1 else prob_no_fault)
+probability_table.to_csv("data/diagnosis/anomalies_table_var/probability_table.csv", index=False)
 
 
 
