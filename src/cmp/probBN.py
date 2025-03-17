@@ -13,6 +13,7 @@ import datetime
 var = "el_UTA_3_3B_7"
 # var = "el_UTA_4_4B_8"
 
+# df con la timeserie del carico elettrico analizzato
 data_el_prep = pd.read_csv(f'data/Aule_R/preprocess_data/electric_data/el_data_prep.csv')
 data_el_prep['timestamp'] = pd.to_datetime(data_el_prep['timestamp'])
 data_el_prep['date'] = data_el_prep['timestamp'].dt.date

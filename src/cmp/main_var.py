@@ -26,7 +26,8 @@ df_cluster = pd.read_csv("data/diagnosis/cluster_data.csv")
 # var = "el_UTA_3_3B_7"
 # var = "el_UTA_4_4B_8"
 
-var_list = ['el_UTA_1_1B_5']
+var_list = ['el_UTA_1_1B_5', 'el_UTA_2_2B_6', 'el_UTA_3_3B_7', 'el_UTA_4_4B_8']
+
 
 df_tot = pd.DataFrame(columns=["date", "Context", "Cluster"])
 
@@ -38,7 +39,7 @@ for var in var_list:
 
     print(f'\n\033[91m{var}\033[0m')
 
-    for context in range(1 , len(df_tw) + 1):
+    for context in range(1, len(df_tw) + 1):
 
         from_tw = df_tw.iloc[context - 1]["from"]
         from_tw = pd.to_datetime(from_tw).time()
@@ -47,6 +48,23 @@ for var in var_list:
         to_tw = df_tw.iloc[context - 1]["to"]
         # if else per evitare errori di trasformazione dell'ora per le 24:00 e per non avere problemi per il numero di osservazioni
         # se si convertisse 24 in 00:00
+
+        m_context = 1
+        obs_per_hour = 4
+
+        if context == 1:
+            # manually define context if it is the beginning
+            context_start = 0  # [hours] i.e., 00:00
+            context_end = context_start + m_context  # [hours] i.e., 01:00
+            # [observations] = ([hour]-[hour])*[observations/hour]
+            m = int((hour_to_dec(df_tw["to"][context - 1]) - 0.25 - m_context) * obs_per_hour)
+            # m = 23
+        else:
+            m = df_tw["observations"][context-1]  # [observations]
+            context_end = hour_to_dec(df_tw["from"][context - 1]) + 0.25  # [hours]
+            context_start = context_end - m_context  # [hours]
+
+
         if to_tw == "24:00":
             to_tw_float = 24
             observations = [int((to_tw_float - from_tw_float) * 4)]
@@ -57,7 +75,7 @@ for var in var_list:
                 'from': from_tw.strftime("%H:%M"),
                 'to': "24:00",
             })
-            m_context = 24 - time_to_float(df_time_window["from"][0])
+            # m_context = 24 - time_to_float(df_time_window["from"][0])
             obs_per_day = int(df_time_window["observations"][0])
         else:
             to_tw_float = time_to_float(to_tw)
@@ -67,13 +85,15 @@ for var in var_list:
                 'from': from_tw.strftime("%H:%M"),
                 'to': to_tw.strftime("%H:%M"),
             })
-            m_context = time_to_float(df_time_window["to"][0]) - time_to_float(df_time_window["from"][0])
+            # m_context = time_to_float(df_time_window["to"][0]) - time_to_float(df_time_window["from"][0])
             obs_per_day = int(df_time_window["observations"][0]) + 1
 
         context_start = time_to_float(df_time_window["from"][0])
         context_end = context_start + m_context
-        m = int(df_time_window["observations"][0])
-        obs_per_hour = 4
+        # m = int(df_time_window["observations"][0])
+        # obs_per_hour = 4
+
+
         # obs_per_day = int(df_time_window["observations"][0]) + 1
         tw_string = (f'Subsequences of {dec_to_hour(m / obs_per_hour)} h (m = {m}) that '
                      f'start in [{dec_to_hour(context_start)},{dec_to_hour(context_end)})')
