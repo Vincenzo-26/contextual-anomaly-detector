@@ -37,7 +37,7 @@ for var in var_list:
     var_dict.update(preprocess_variabili_interne(var))
 
 max_cluster = df_cluster['cluster'].nunique()
-for context in range(len(df_tw), len(df_tw) + 1):
+for context in range(1, len(df_tw) + 1):
 
     # per fill della sottosequenza
     from_tw = datetime.datetime.strptime(df_tw.iloc[context - 1]["from"], "%H:%M").time()
