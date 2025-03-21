@@ -8,11 +8,6 @@ import plotly.graph_objects as go
 import datetime
 # dataframe con i carici elettrici
 
-# var = "el_UTA_1_1B_5"
-# var = "el_UTA_2_2B_6"
-var = "el_UTA_3_3B_7"
-# var = "el_UTA_4_4B_8"
-
 # df con la timeserie del carico elettrico analizzato
 data_el_prep = pd.read_csv(f'data/Aule_R/preprocess_data/electric_data/el_data_prep.csv')
 data_el_prep['timestamp'] = pd.to_datetime(data_el_prep['timestamp'])
@@ -39,7 +34,6 @@ anm_el_and_var.to_csv(f"data/diagnosis/anomalies_table_var/anomalies_el_&_var_ta
 
 
 report_content = {
-    'title' : var,
     'plots': {
         'plot_el': {},
         'plot_var': {}
@@ -65,8 +59,11 @@ for index, row in anm_el_and_var.iterrows():
     from_tw = df_tw.iloc[context - 1]["from"]
     from_tw = datetime.datetime.strptime(from_tw, "%H:%M")
 
-    to_tw = df_tw.iloc[context - 1]["to"]
-    to_tw = datetime.datetime.strptime(to_tw, "%H:%M")
+    if context == (len(df_tw)):
+        to_tw = datetime.datetime.strptime("23:45", "%H:%M").time()
+    else:
+        to_tw = datetime.datetime.strptime(df_tw.iloc[context - 1]["to"], "%H:%M").time()
+
 
     from_ctx =df_ctx.iloc[context - 1]["from"]
     from_ctx = datetime.datetime.strptime(from_ctx, "%H:%M")
@@ -125,11 +122,16 @@ for index, row in anm_el_and_var.iterrows():
     report_content['plots']['plot_var'][key_el] = {}
 
     for col in range(3, len(anm_el_and_var.columns) - 1): # il -1 perchè l'ultima colonne è di vero o falso
-        if anm_el_and_var.iloc[0, col] == 1:
+        if row.iloc[col] == 1:
             var = anm_el_and_var.columns[col]
-            aula = var.split("_")[2]
 
-            df_var = pd.read_csv(f"data/Aule_R/preprocess_data/var_int_data/aula_R{aula}.csv")
+            df_var = pd.read_csv("data/Aule_R/preprocess_data/electric_data/data_el_aule_R_pre.csv")
+            df_var['timestamp'] = pd.to_datetime(df_var['timestamp'])
+            df_var['date'] = df_var['timestamp'].dt.date
+            df_var['time'] = df_var['timestamp'].dt.time
+
+            df_var["date"] = pd.to_datetime(df_var["date"]).dt.date
+            df_cluster_filtr["date"] = pd.to_datetime(df_cluster_filtr["date"]).dt.date
 
             df_cluster_var_filtr = df_var[df_var["date"].isin(df_cluster_filtr["date"])]
 
@@ -190,28 +192,28 @@ for index, row in anm_el_and_var.iterrows():
         else:
             continue
 
-output_file = f"results/reports/report_{var}.html"
+output_file = f"results/reports/report_var.html"
 save_report(report_content, output_file, "template_var.html")
 absolute_path = os.path.abspath(output_file)
 webbrowser.open_new_tab(f'file://{absolute_path}')
 
-# tabella delle probabilità
-prob_fault = 0.9
-prob_no_fault = 0.1
-
-anm_el_and_var = anm_el_and_var.drop(columns=["anm_el"])
-
-anm_el_and_var = anm_el_and_var.rename(columns={"date": "Date"})
-var_columns = list(anm_el_and_var.columns)[3:]
-
-probability_table = anm_table_el[["Date", "Context", "Cluster"]].copy()
-merged_table = pd.merge(probability_table, anm_el_and_var, on=["Date", "Context", "Cluster"], how="left")
-
-#    Se per la combinazione (Date, Context, Cluster) non è presente (NaN) =>  prob_no_fault (0.1)
-#    - Se il valore è 1 =>  prob_fault (0.9)
-for col in var_columns:
-    probability_table[col] = merged_table[col].apply(lambda x: prob_fault if x == 1 else prob_no_fault)
-probability_table.to_csv("data/diagnosis/anomalies_table_var/probability_table.csv", index=False)
+# # tabella delle probabilità
+# prob_fault = 0.9
+# prob_no_fault = 0.1
+#
+# anm_el_and_var = anm_el_and_var.drop(columns=["anm_el"])
+#
+# anm_el_and_var = anm_el_and_var.rename(columns={"date": "Date"})
+# var_columns = list(anm_el_and_var.columns)[3:]
+#
+# probability_table = anm_table_el[["Date", "Context", "Cluster"]].copy()
+# merged_table = pd.merge(probability_table, anm_el_and_var, on=["Date", "Context", "Cluster"], how="left")
+#
+# #    Se per la combinazione (Date, Context, Cluster) non è presente (NaN) =>  prob_no_fault (0.1)
+# #    - Se il valore è 1 =>  prob_fault (0.9)
+# for col in var_columns:
+#     probability_table[col] = merged_table[col].apply(lambda x: prob_fault if x == 1 else prob_no_fault)
+# probability_table.to_csv("data/diagnosis/anomalies_table_var/probability_table.csv", index=False)
 
 
 

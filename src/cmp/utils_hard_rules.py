@@ -19,17 +19,14 @@ def preprocess(df, df_temp):
     df.rename(columns={'QE UTA 2/2B/6': 'el_UTA_2_2B_6'}, inplace=True)
     df.rename(columns={'QE UTA 3/3B/7': 'el_UTA_3_3B_7'}, inplace=True)
     df.rename(columns={'QE UTA 4/4B/8': 'el_UTA_4_4B_8'}, inplace=True)
-    df['total_power'] = df.drop(columns=['timestamp']).sum(axis=1)
-
     df['timestamp'] = pd.to_datetime(df['timestamp'])
+
     df_temp.rename(columns={'Time': 'timestamp'}, inplace=True)
     df_temp['timestamp'] = pd.to_datetime(df_temp['timestamp'])
 
     df = pd.merge(df, df_temp[['timestamp', 'Temperatura Esterna']], on='timestamp', how='left')
-    df.rename(columns={'Temperatura Esterna': 't_ext'}, inplace=True)
+    df.rename(columns={'Temperatura Esterna': 'temp'}, inplace=True)
 
-    df['date'] = df['timestamp'].dt.date
-    df['time'] = df['timestamp'].dt.time
     df = df[df['timestamp'].dt.minute.isin([0, 15, 30, 45])]
     df = df.drop_duplicates(subset='timestamp')
 
@@ -52,9 +49,8 @@ def preprocess(df, df_temp):
     df = df.infer_objects(copy=False)
     df.interpolate(method='linear', inplace=True)
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    save_path = os.path.join(current_dir, "..", "Aule_R", "data", "preprocess_data", f"el_aule_R.csv")
-    df.to_csv(save_path)
+    df.reset_index(inplace=True)
+    df.to_csv("data/Aule_R/preprocess_data/electric_data/data_el_aule_R_pre.csv", index = False)
     return df
 
 def preprocess_variabili_interne(var):
@@ -130,33 +126,11 @@ def time_to_float(t):
 
     return t.hour + t.minute / 60
 
-def merge_anomaly_tables(df_tot, df_new):
+def merge_anomaly_tables(df_tot, df_var):
     key_cols = ["date", "Context", "Cluster"]
     if df_tot.empty:
-        return df_new.copy()
-    # Impostiamo le chiavi come indice
-    df_tot = df_tot.set_index(key_cols)
-    df_new = df_new.set_index(key_cols)
-    for idx, new_row in df_new.iterrows():
-        if idx in df_tot.index:
-            # Se la riga esiste, aggiorna le colonne aggiungendo quelle della nuova variabile;
-            # nel caso di "t_ext", se già presente (valore diverso da 0) non si aggiorna.
-            for col in new_row.index:
-                if col in df_tot.columns:
-                    if col == "t_ext" and df_tot.loc[idx, col] != 0:
-                        continue
-                    else:
-                        df_tot.loc[idx, col] = new_row[col]
-                else:
-                    df_tot.loc[idx, col] = new_row[col]
-        else:
-            # Se la tripla non esiste, crea una nuova riga;
-            # per le colonne già presenti in df_tot che non sono indicate in new_row assegna 0.
-            new_full = {col: 0 for col in df_tot.columns}
-            for col in new_row.index:
-                new_full[col] = new_row[col]
-            df_tot.loc[idx] = new_full
-    # Ripristiniamo l'indice e assegniamo 0 ai NaN
-    df_tot = df_tot.reset_index()
-    df_tot.fillna(0, inplace=True)
-    return df_tot
+        return df_var.copy()
+    df_merged = pd.merge(df_tot, df_var, on=key_cols, how='outer')
+    df_merged.fillna(0, inplace=True)
+
+    return df_merged

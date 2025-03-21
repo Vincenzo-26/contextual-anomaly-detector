@@ -22,10 +22,13 @@ df_temp = pd.read_csv("data/Aule_R/raw_data/T_ext_aule_R.csv")
 
 df_tot = pd.DataFrame(columns=["date", "Context", "Cluster"])
 
+df_el = pd.read_csv("data/Aule_R/raw_data/electric_data_raw/data_el_aule_R.csv")
+df_el = preprocess(df_el, df_temp)
+
 data_el_aule_R = pd.read_csv("data/Aule_R/raw_data/electric_data_raw/data_el_aule_R.csv")
 data_el_aule_R = preprocess(data_el_aule_R, df_temp)
 data_el_aule_R.set_index('timestamp', inplace=True)
-var_list = []
+
 for var in data_el_aule_R.columns:
 # for var in [data_el_aule_R.columns[-1]]:
     # Dataframe temporaneo per le anomalie relative alla variabile corrente
@@ -43,7 +46,6 @@ for var in data_el_aule_R.columns:
         to_tw = df_tw.iloc[context - 1]["to"]
         # if else per evitare errori di trasformazione dell'ora per le 24:00 e per non avere problemi per il numero di osservazioni
         # se si convertisse 24 in 00:00
-
         m_context = 1
         obs_per_hour = 4
 
@@ -58,7 +60,6 @@ for var in data_el_aule_R.columns:
             m = df_tw["observations"][context-1]  # [observations]
             context_end = hour_to_dec(df_tw["from"][context - 1]) + 0.25  # [hours]
             context_start = context_end - m_context  # [hours]
-
 
         if to_tw == "24:00":
             to_tw_float = 24
@@ -82,9 +83,9 @@ for var in data_el_aule_R.columns:
             })
             # m_context = time_to_float(df_time_window["to"][0]) - time_to_float(df_time_window["from"][0])
             obs_per_day = int(df_time_window["observations"][0]) + 1
-
-        context_start = time_to_float(df_time_window["from"][0])
-        context_end = context_start + m_context
+        # obs_per_day = m
+        # context_start = time_to_float(df_time_window["from"][0])
+        # context_end = context_start + m_context
         # m = int(df_time_window["observations"][0])
         # obs_per_hour = 4
 
@@ -96,10 +97,6 @@ for var in data_el_aule_R.columns:
                                 f'to{dec_to_hour(context_end)}_m{dec_to_hour(m / obs_per_hour)}'
                                 ).replace(":", "_")
 
-
-
-
-
         max_cluster = df_cluster['cluster'].nunique()
         for num_cluster in range(1, max_cluster + 1):
 
@@ -110,19 +107,25 @@ for var in data_el_aule_R.columns:
             unique_dates = df_cluster[df_cluster['cluster'] == f"Cluster_{num_cluster}"]['date'].unique().tolist()
             unique_dates = [pd.to_datetime(d).date() for d in unique_dates]
 
-            # Dizionario con i df delle aule processate
-            df_el = pd.read_csv("data/Aule_R/raw_data/electric_data_raw/data_el_aule_R.csv")
-            df_el = preprocess(df_el, df_temp)
-
+            data = df_el.copy()
             current_var = var
             if current_var == "temp":
-                df_el['t_ext'] = df_el['temp']
+                data['t_ext'] = data['temp']
                 current_var = "t_ext"
-            data = df_el[['timestamp', current_var, 'temp']]
-            data = data.rename(columns={current_var: "value"})
+
 
             data['timestamp'] = pd.to_datetime(data['timestamp'])
             data['date'] = data['timestamp'].dt.date
+            data['time'] = data['timestamp'].dt.time
+
+            data = data[
+                (data['time'] >= from_tw) &
+                (data['time'] <= to_tw) &
+                (data['date'].isin(unique_dates))
+                ]
+
+            data = data[['timestamp', current_var, 'temp']]
+            data = data.rename(columns={current_var: "value"})
             unique_days = data['timestamp'].dt.date.unique()
 
             group_df = pd.DataFrame({
@@ -226,22 +229,7 @@ for var in data_el_aule_R.columns:
             if num_anomalies_to_show > 0:
                 if num_anomalies_to_show > 10:
                     num_anomalies_to_show = 10
-                data_plot = data['value'].values.reshape((-1, obs_per_day))[group].T
-                data_plot = pd.DataFrame(data_plot, columns=group_dates)
-                data_plot.columns = pd.to_datetime(data_plot.columns).strftime('%Y-%m-%d')
-                fig = px.line(data_plot, line_shape="spline")
-                fig.update_traces(line=dict(color='rgba(128, 128, 128, 0.2)'))
-                for date in cmp_ad_score_dates:
-                    cmp_ad_score_dates_fmt = pd.to_datetime(date).strftime('%Y-%m-%d')
-                    index_anom_plot = data_plot.columns.get_loc(cmp_ad_score_dates_fmt)
-                    fig.data[index_anom_plot].update(line=dict(color='red', width=2))
-                fig.update(layout=dict(
-                    title=f"{var}",
-                    xaxis_title=None,
-                    yaxis_title="Power [kW]",
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    showlegend=False
-                ))
+
                 time_interval_group = datetime.datetime.now() - begin_time_group
                 hours, remainder = divmod(time_interval_group.total_seconds(), 3600)
                 minutes, seconds = divmod(remainder, 60)
@@ -252,7 +240,7 @@ for var in data_el_aule_R.columns:
                 string_anomaly_print = "- " + var + " (-) \t\t-> no anomalies "
                 print(string_anomaly_print + "\033[92mgreen\033[0m")
 
-        df_var = pd.concat([df_var, anm_table_overall], ignore_index=True)
+            df_var = pd.concat([df_var, anm_table_overall], ignore_index=True)
 
     df_tot = merge_anomaly_tables(df_tot, df_var)
 
