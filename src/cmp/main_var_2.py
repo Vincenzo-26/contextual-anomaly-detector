@@ -24,14 +24,9 @@ df_tot = pd.DataFrame(columns=["date", "Context", "Cluster"])
 
 df_el = pd.read_csv("data/Aule_R/raw_data/electric_data_raw/data_el_aule_R.csv")
 df_el = preprocess(df_el, df_temp)
+df_el.set_index('timestamp', inplace=True)
 
-data_el_aule_R = pd.read_csv("data/Aule_R/raw_data/electric_data_raw/data_el_aule_R.csv")
-data_el_aule_R = preprocess(data_el_aule_R, df_temp)
-data_el_aule_R.set_index('timestamp', inplace=True)
-
-for var in data_el_aule_R.columns:
-# for var in [data_el_aule_R.columns[-1]]:
-    # Dataframe temporaneo per le anomalie relative alla variabile corrente
+for var in df_el.columns:
     df_var = pd.DataFrame()
 
     print(f'\n\033[91m{var}\033[0m')
@@ -44,22 +39,17 @@ for var in data_el_aule_R.columns:
         from_tw_float = time_to_float(from_tw)
 
         to_tw = df_tw.iloc[context - 1]["to"]
-        # if else per evitare errori di trasformazione dell'ora per le 24:00 e per non avere problemi per il numero di osservazioni
-        # se si convertisse 24 in 00:00
         m_context = 1
         obs_per_hour = 4
 
         if context == 1:
-            # manually define context if it is the beginning
-            context_start = 0  # [hours] i.e., 00:00
-            context_end = context_start + m_context  # [hours] i.e., 01:00
-            # [observations] = ([hour]-[hour])*[observations/hour]
+            context_start = 0
+            context_end = context_start + m_context
             m = int((hour_to_dec(df_tw["to"][context - 1]) - 0.25 - m_context) * obs_per_hour)
-            # m = 23
         else:
-            m = df_tw["observations"][context-1]  # [observations]
-            context_end = hour_to_dec(df_tw["from"][context - 1]) + 0.25  # [hours]
-            context_start = context_end - m_context  # [hours]
+            m = df_tw["observations"][context-1]
+            context_end = hour_to_dec(df_tw["from"][context - 1]) + 0.25
+            context_start = context_end - m_context
 
         if to_tw == "24:00":
             to_tw_float = 24
@@ -71,7 +61,6 @@ for var in data_el_aule_R.columns:
                 'from': from_tw.strftime("%H:%M"),
                 'to': "24:00",
             })
-            # m_context = 24 - time_to_float(df_time_window["from"][0])
             obs_per_day = int(df_time_window["observations"][0])
         else:
             to_tw_float = time_to_float(to_tw)
@@ -81,16 +70,9 @@ for var in data_el_aule_R.columns:
                 'from': from_tw.strftime("%H:%M"),
                 'to': to_tw.strftime("%H:%M"),
             })
-            # m_context = time_to_float(df_time_window["to"][0]) - time_to_float(df_time_window["from"][0])
             obs_per_day = int(df_time_window["observations"][0]) + 1
         # obs_per_day = m
-        # context_start = time_to_float(df_time_window["from"][0])
-        # context_end = context_start + m_context
-        # m = int(df_time_window["observations"][0])
-        # obs_per_hour = 4
 
-
-        # obs_per_day = int(df_time_window["observations"][0]) + 1
         tw_string = (f'Subsequences of {dec_to_hour(m / obs_per_hour)} h (m = {m}) that '
                      f'start in [{dec_to_hour(context_start)},{dec_to_hour(context_end)})')
         context_string_small = (f'ctx_from{dec_to_hour(context_start)}_'
@@ -114,7 +96,7 @@ for var in data_el_aule_R.columns:
                 current_var = "t_ext"
 
 
-            data['timestamp'] = pd.to_datetime(data['timestamp'])
+            data['timestamp'] = pd.to_datetime(data.index)
             data['date'] = data['timestamp'].dt.date
             data['time'] = data['timestamp'].dt.time
 
@@ -143,8 +125,9 @@ for var in data_el_aule_R.columns:
                 )
                 for x in range(len(data) // obs_per_day)
             ])
-
-            calc = AnytimeCalculator(m, data['value'].values)
+            ########## NEL DF ORIGINALE C'è M AL POSTO DI OBS_PER_DAY IN CALC
+            calc = AnytimeCalculator(obs_per_day, data['value'].values)
+            ##########
             calc.add_generator(0, Euclidean())
             cmp = calc.add_consumer([0], ContextualMatrixProfile(contexts))
             calc.calculate_columns(print_progress=True)
@@ -248,10 +231,6 @@ cols = df_tot.columns.tolist()
 fixed_order = ["date", "Context", "Cluster"]
 other_cols = [c for c in cols if c not in fixed_order]
 df_tot = df_tot[fixed_order + other_cols]
-
-# for var in df_tot.columns:
-#     if var not in fixed_order:
-#         df_tot[var] = df_tot[var].fillna(0).astype(int)
 
 df_tot.to_csv("data/diagnosis/anomalies_table_var/anomalies_var_table_overall.csv", index=False)
 
