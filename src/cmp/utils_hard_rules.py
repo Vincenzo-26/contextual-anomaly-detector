@@ -134,3 +134,14 @@ def merge_anomaly_tables(df_tot, df_var):
     df_merged.fillna(0, inplace=True)
 
     return df_merged
+
+
+def extract_date_time(df):
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df['date'] = df['timestamp'].dt.date
+    df['time'] = df['timestamp'].dt.time
+
+    other_cols = [col for col in df.columns if col not in ['timestamp', 'date', 'time']]
+    df = df[['timestamp', 'date', 'time'] + other_cols]
+
+    return df
