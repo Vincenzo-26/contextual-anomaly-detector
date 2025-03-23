@@ -36,10 +36,10 @@ if __name__ == '__main__':
     # parser.add_argument('-country', help='The country code as defined by https://pypi.org/project/holidays/', type=str)
     # args = parser.parse_args()
 
-    # variable_name = "total_power"
+    variable_name = "total_power"
     # variable_name = "el_UTA_1_1B_5"
     # variable_name = "el_UTA_2_2B_6"
-    variable_name = "el_UTA_3_3B_7"
+    # variable_name = "el_UTA_3_3B_7"
     # variable_name = "el_UTA_4_4B_8"
 
     if (variable_name.startswith("el_UTA_") or (variable_name == "total_power") or (variable_name == "el_pompe")):
