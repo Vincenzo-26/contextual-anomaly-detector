@@ -18,8 +18,6 @@ anm_table_el = pd.read_csv(f'data/diagnosis/anomalies_table_overall.csv') # data
 
 set_el = set(anm_table_el[['Date', 'Context', 'Cluster']].apply(tuple, axis=1))
 
-# dataframe dove vengono evidenziate le date anomale contemporaneamente del carico elettrico e di almeno una variabile per
-# datra, contesto e cluster
 anm_table_var['anm_el'] = anm_table_var[['date', 'Context', 'Cluster']].apply(
     lambda row: tuple(row) in set_el, axis=1
 )
@@ -87,11 +85,6 @@ for (context, cluster), group in grouped:
         (anm_table_el['Cluster'] == cluster)
     ]
 
-    if not match_row.empty:
-        anomaly_score = f"{round(match_row.iloc[0]['Anomaly Score'], 2):.2f}"
-    else:
-        anomaly_score = "N/A"
-
     from_tw = datetime.datetime.strptime(df_tw.iloc[context - 1]["from"], "%H:%M")
     to_tw = datetime.datetime.strptime("23:45", "%H:%M") if context == len(df_tw) else datetime.datetime.strptime(df_tw.iloc[context - 1]["to"], "%H:%M")
 
@@ -124,7 +117,7 @@ for (context, cluster), group in grouped:
     fig_el.add_vrect(x0=from_tw, x1=to_tw, fillcolor="lightcoral", opacity=0.5, layer="below", line_width=0)
 
     fig_el.update_layout(
-        title=f'Electric anomaly — Anomaly score: {anomaly_score}',
+        title=f'Electric anomaly',
         title_x=0.5,
         xaxis_title='Time',
         yaxis_title='Electric Power [kW]'
@@ -137,60 +130,66 @@ for (context, cluster), group in grouped:
     }
     report_content['plots']['plot_var'][key_el] = {}
 
-    for col in range(3, len(anm_el_and_var.columns) - 1):
-        if group.iloc[0, col] == 1:  # usa la prima riga del gruppo per controllare la variabile
-            var = anm_el_and_var.columns[col]
+    var_columns = anm_el_and_var.columns[3:-1]  # Salta date, Context, Cluster, anm_el
 
-            df_var = pd.read_csv("data/Aule_R/preprocess_data/electric_data/data_el_aule_R_pre.csv")
-            df_var['timestamp'] = pd.to_datetime(df_var['timestamp'])
-            df_var['date'] = df_var['timestamp'].dt.date
-            df_var['time'] = df_var['timestamp'].dt.time
-            df_var['date'] = pd.to_datetime(df_var['date'])
-            df_cluster_filtr['date'] = pd.to_datetime(df_cluster_filtr['date'])
+    for var in var_columns:
+        group_var = group[group[var] == 1]
+        if group_var.empty:
+            continue
 
-            df_cluster_var_filtr = df_var[df_var['date'].isin(df_cluster_filtr['date'])]
+        data_anomala_var_list = pd.to_datetime(group_var['date']).tolist()
 
-            pivot_var = df_cluster_var_filtr.pivot_table(
-                index='date',
-                columns='time',
-                values=var
-            )
-            pivot_var.columns = pd.to_datetime(pivot_var.columns, format="%H:%M:%S")
-            pivot_var.index = pd.to_datetime(pivot_var.index)
+        df_var = pd.read_csv("data/Aule_R/preprocess_data/electric_data/data_el_aule_R_pre.csv")
+        df_var['timestamp'] = pd.to_datetime(df_var['timestamp'])
+        df_var['date'] = df_var['timestamp'].dt.date
+        df_var['time'] = df_var['timestamp'].dt.time
+        df_var['date'] = pd.to_datetime(df_var['date'])
 
-            fig_var = go.Figure()
-            for date in pivot_var.index:
-                if date not in data_anomala_list:
-                    fig_var.add_trace(go.Scatter(
-                        x=pivot_var.columns,
-                        y=pivot_var.loc[date],
-                        mode='lines',
-                        name=str(date.date()),
-                        line=dict(color='grey'),
-                        hovertemplate=f"{date.date()}<br>%{{x|%H:%M}}<br>%{{y}}<extra></extra>"
-                    ))
-            for date in pivot_var.index:
-                if date in data_anomala_list:
-                    fig_var.add_trace(go.Scatter(
-                        x=pivot_var.columns,
-                        y=pivot_var.loc[date],
-                        mode='lines',
-                        name=str(date.date()),
-                        line=dict(color='red'),
-                        hovertemplate=f"{date.date()}<br>%{{x|%H:%M}}<br>%{{y}}<extra></extra>"
-                    ))
+        df_cluster_filtr['date'] = pd.to_datetime(df_cluster_filtr['date'])
+        df_cluster_var_filtr = df_var[df_var['date'].isin(df_cluster_filtr['date'])]
 
-            fig_var.add_vrect(x0=from_ctx, x1=to_ctx, fillcolor="darkred", opacity=0.5, layer="below", line_width=0)
-            fig_var.add_vrect(x0=from_tw, x1=to_tw, fillcolor="lightcoral", opacity=0.5, layer="below", line_width=0)
+        pivot_var = df_cluster_var_filtr.pivot_table(
+            index='date',
+            columns='time',
+            values=var
+        )
+        pivot_var.columns = pd.to_datetime(pivot_var.columns, format="%H:%M:%S")
+        pivot_var.index = pd.to_datetime(pivot_var.index)
 
-            fig_var.update_layout(
-                title=f'{var} Context {context} Cluster {cluster}',
-                title_x=0.5,
-                xaxis_title='Time',
-                yaxis_title=var
-            )
+        fig_var = go.Figure()
+        for date in pivot_var.index:
+            if date not in data_anomala_var_list:
+                fig_var.add_trace(go.Scatter(
+                    x=pivot_var.columns,
+                    y=pivot_var.loc[date],
+                    mode='lines',
+                    name=str(date.date()),
+                    line=dict(color='grey'),
+                    hovertemplate=f"{date.date()}<br>%{{x|%H:%M}}<br>%{{y}}<extra></extra>"
+                ))
+        for date in pivot_var.index:
+            if date in data_anomala_var_list:
+                fig_var.add_trace(go.Scatter(
+                    x=pivot_var.columns,
+                    y=pivot_var.loc[date],
+                    mode='lines',
+                    name=str(date.date()),
+                    line=dict(color='red'),
+                    hovertemplate=f"{date.date()}<br>%{{x|%H:%M}}<br>%{{y}}<extra></extra>"
+                ))
 
-            report_content['plots']['plot_var'][key_el][var] = fig_var.to_html(full_html=False, include_plotlyjs='cdn')
+        fig_var.add_vrect(x0=from_ctx, x1=to_ctx, fillcolor="darkred", opacity=0.5, layer="below", line_width=0)
+        fig_var.add_vrect(x0=from_tw, x1=to_tw, fillcolor="lightcoral", opacity=0.5, layer="below", line_width=0)
+
+        fig_var.update_layout(
+            title=f'{var} Context {context} Cluster {cluster}',
+            title_x=0.5,
+            xaxis_title='Time',
+            yaxis_title=var
+        )
+
+        # Salva il grafico della variabile
+        report_content['plots']['plot_var'][key_el][var] = fig_var.to_html(full_html=False, include_plotlyjs='cdn')
 
 
 output_file = f"results/reports/report_var.html"
@@ -198,23 +197,7 @@ save_report(report_content, output_file, "template_var.html")
 absolute_path = os.path.abspath(output_file)
 webbrowser.open_new_tab(f'file://{absolute_path}')
 
-# # tabella delle probabilità
-# prob_fault = 0.9
-# prob_no_fault = 0.1
-#
-# anm_el_and_var = anm_el_and_var.drop(columns=["anm_el"])
-#
-# anm_el_and_var = anm_el_and_var.rename(columns={"date": "Date"})
-# var_columns = list(anm_el_and_var.columns)[3:]
-#
-# probability_table = anm_table_el[["Date", "Context", "Cluster"]].copy()
-# merged_table = pd.merge(probability_table, anm_el_and_var, on=["Date", "Context", "Cluster"], how="left")
-#
-# #    Se per la combinazione (Date, Context, Cluster) non è presente (NaN) =>  prob_no_fault (0.1)
-# #    - Se il valore è 1 =>  prob_fault (0.9)
-# for col in var_columns:
-#     probability_table[col] = merged_table[col].apply(lambda x: prob_fault if x == 1 else prob_no_fault)
-# probability_table.to_csv("data/diagnosis/anomalies_table_var/probability_table.csv", index=False)
+
 
 
 
