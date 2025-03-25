@@ -31,6 +31,8 @@ df_el = preprocess(df_el, df_temp)
 df_el.set_index('timestamp', inplace=True)
 df_el.rename(columns={'temp': 't_ext'}, inplace=True)
 
+evidence_var = pd.DataFrame(columns=["date", "Context", "Cluster"])
+
 # Loop over each variable
 for variable_name in df_el.columns[:-1]:
     print(f'\n\033[91m{variable_name}\033[0m')
@@ -109,6 +111,17 @@ for variable_name in df_el.columns[:-1]:
             anomalies_table_partial["Cluster"] = id_cluster + 1
             anomalies_table_var = pd.concat([anomalies_table_var, anomalies_table_partial], ignore_index=True)
 
+            # POPOLAMENTO EVIDENCE_VAR
+            if len(cmp_ad_score_dates) > 0:
+                evidence_table_partial = pd.DataFrame({
+                    "date": cmp_ad_score_dates,
+                    "Context": id_tw + 1,
+                    "Cluster": id_cluster + 1,
+                    variable_name: cmp_ad_score[cmp_ad_score_index]
+                })
+                evidence_var = pd.concat([evidence_var, evidence_table_partial], ignore_index=True)
+
+
             num_anomalies_to_show = np.count_nonzero(~np.isnan(cmp_ad_score))
             if num_anomalies_to_show > 0:
                 if num_anomalies_to_show > 10:
@@ -137,10 +150,19 @@ for variable_name in df_el.columns[:-1]:
     minutes = (total_time.total_seconds() // 60) % 60
     logger.info(f"TOTAL {str(int(minutes))} min {str(int(seconds))} s")
 
-# Ordina colonne e salva
-cols = df_tot.columns.tolist()
 fixed = ["date", "Context", "Cluster"]
+
+cols = df_tot.columns.tolist()
 variable_cols = sorted([col for col in cols if col not in fixed])
 df_tot = df_tot[fixed + variable_cols]
-
 df_tot.to_csv("data/diagnosis/anomalies_table_var/anomalies_var_table_overall.csv", index=False)
+
+
+evidence_var = evidence_var.groupby(["date", "Context", "Cluster"], as_index=False).max()
+evidence_var = evidence_var.fillna(0)
+
+cols_ev = evidence_var.columns.tolist()
+variable_cols_ev = sorted([col for col in cols_ev if col not in fixed])
+evidence_var = evidence_var[fixed + variable_cols_ev]
+evidence_var.to_csv("data/diagnosis/anomalies_table_var/evidence_var_table_overall.csv", index=False)
+
