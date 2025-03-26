@@ -15,24 +15,20 @@ df_cluster = pd.read_csv("data/diagnosis/cluster_data.csv") # dataframe con i cl
 
 anm_table_var = pd.read_csv(f'data/diagnosis/anomalies_table_var/anomalies_var_table_overall.csv') # dataframe con le anomalie delle variabili interne
 anm_table_el = pd.read_csv(f'data/diagnosis/anomalies_table_overall.csv') # dataframe con le anomalie elettiche
+evidence_var_full = pd.read_csv(f'data/diagnosis/anomalies_table_var/evidence_var_full.csv')
 
 set_el = set(anm_table_el[['Date', 'Context', 'Cluster']].apply(tuple, axis=1))
-
-anm_table_var['anm_el'] = anm_table_var[['date', 'Context', 'Cluster']].apply(
-    lambda row: tuple(row) in set_el, axis=1
-)
-
-set_var = set(anm_table_var[['date', 'Context', 'Cluster']].apply(tuple, axis=1))
-anm_table_el['anm_var'] = anm_table_el[['Date', 'Context', 'Cluster']].apply(
-    lambda row: tuple(row) in set_var, axis=1
-)
-
-
-anm_el_and_var = anm_table_var[anm_table_var['anm_el']]
+anm_el_and_var = anm_table_var[anm_table_var[['date', 'Context', 'Cluster']].apply(tuple, axis=1).isin(set_el)].reset_index(drop=True)
 anm_el_and_var.to_csv(f"data/diagnosis/anomalies_table_var/anomalies_el_&_var_table_overall.csv", index=False)
 
-num_anm_el_and_var = len(anm_el_and_var) + 1
-num_anm_tot = len(anm_table_el) + 1
+evidence_el_and_var_full = evidence_var_full[evidence_var_full[['date', 'Context', 'Cluster']].apply(tuple, axis=1).isin(set_el)].reset_index(drop=True)
+evidence_el_and_var_full.to_csv(f"data/diagnosis/anomalies_table_var/evidence_el_&_var_full.csv", index=False)
+
+set_var = set(anm_table_var[['date', 'Context', 'Cluster']].apply(tuple, axis=1))
+anm_table_el['anm_var'] = anm_table_el[['Date', 'Context', 'Cluster']].apply(lambda row: tuple(row) in set_var, axis=1)
+
+num_anm_el_and_var = len(anm_el_and_var)
+num_anm_tot = len(anm_table_el)
 anm_string = (f"{num_anm_el_and_var} anomalie interne su {num_anm_tot} anomalie a livello superiore "
               f"({round(num_anm_el_and_var/num_anm_tot*100, 1)}%)")
 
@@ -67,9 +63,7 @@ for (context, cluster), group in grouped:
     first_date = data_anomala_list[0]  # per l'anomaly score
     data_anomala_str = first_date.strftime('%Y-%m-%d')
 
-    df_cluster_filtr = df_cluster[
-        (df_cluster['cluster'] == f"Cluster_{cluster}")
-    ]
+    df_cluster_filtr = df_cluster[df_cluster['cluster'] == f"Cluster_{cluster}"].copy()
 
     pivot_el = df_cluster_filtr.pivot_table(
         index='date',
@@ -195,9 +189,12 @@ for (context, cluster), group in grouped:
 output_file = f"results/reports/report_var.html"
 save_report(report_content, output_file, "template_var.html")
 absolute_path = os.path.abspath(output_file)
-webbrowser.open_new_tab(f'file://{absolute_path}')
+# webbrowser.open_new_tab(f'file://{absolute_path}')
 
-
+evidence_var_full.set_index(['date', 'Context', 'Cluster'], inplace=True)
+evidence_var_full = evidence_var_full.map(lambda x: x / 8)
+evidence_var_full.reset_index(inplace=True)
+evidence_var_full.to_csv(f"data/diagnosis/anomalies_table_var/evidence_var_full.csv", index=False)
 
 
 
