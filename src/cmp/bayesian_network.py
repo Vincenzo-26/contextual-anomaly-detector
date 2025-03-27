@@ -2,6 +2,7 @@ import pandas as pd
 from pgmpy.models import BayesianNetwork
 from pgmpy.factors.discrete import TabularCPD
 from pgmpy.inference import VariableElimination
+from utils_hard_rules import *
 import os
 import numpy as np
 ############ 0 = NORMALE     1 = FAULT ###########
@@ -18,91 +19,92 @@ Nel parametro "values" si passa una matrice in forma di lista di liste (ogni lis
 Per ogni colonna la somma delle probabilità deve essere uguale a 1.
 """
 
-
-var_list = ['el_UTA_1_1B_5', 'el_UTA_2_2B_6', 'el_UTA_3_3B_7', 'el_UTA_4_4B_8']
-var_aule_list = ['T_amb', 'T_setpoint']
+r2_df_firma = pd.read_csv("data/diagnosis/anomalies_table_var/r2_df_firma.csv")
+soglia_r2 = 0.6
+df_el = pd.read_csv("data/Aule_R/preprocess_data/electric_data/data_el_aule_R_pre.csv")
+df_el = extract_date_time(df_el)
 
 models = {}
 # modelli strutturali
-for uta in var_list:
-    archi = [(f"{uta}", f"int_fault_{uta}"), (f"{uta}", "t_ext"), (f"{uta}", "Condizionamento")]
-    aule = uta.split("_")[2:]
-    for var in var_aule_list:
-        for aula in aule:
-            archi.append((f"{uta}", f"{var}_{aula}"))
+for var in df_el.drop(columns= ["timestamp", "date", "time"]).columns:
+    archi = [(f"{var}", f"power_KPI_{var}"), (f"{var}", f"t_ext_KPI_{var}")]
     model = BayesianNetwork(archi)
 
     # probabilità a priori dei nodi senza padre
-    cpd_priori = TabularCPD(variable=f'{uta}', variable_card=2, values=[[0.9], [0.1]])
+    cpd_priori = TabularCPD(variable=f'{var}', variable_card=2, values=[[0.9], [0.1]])
     model.add_cpds(cpd_priori)
 
     # probabilità condizionate
-    cpd_cond = TabularCPD(variable="Condizionamento",
+    # power KPI
+    cpd_power_KPI = TabularCPD(variable=f"power_KPI_{var}",
                                variable_card=2,
                                values=[[0.9, 0.1],
                                        [0.1, 0.9]],
-                               evidence=[f"{uta}"],
+                               evidence=[f"{var}"],
                                evidence_card=[2])
-    model.add_cpds(cpd_cond)
-
-    # fault interno
-    cpd_int_fault = TabularCPD(variable=f"int_fault_{uta}",
-                               variable_card=2,
-                               values=[[0.9, 0.1],
-                                       [0.1, 0.9]],
-                               evidence=[f"{uta}"],
-                               evidence_card=[2])
-    model.add_cpds(cpd_int_fault)
+    model.add_cpds(cpd_power_KPI)
 
     # fault temperatura esterna
-    cpd_t_ext = TabularCPD(variable=f"t_ext",
-                           variable_card=2,
-                           values=[[0.8, 0.2],
-                                   [0.2, 0.8]],
-                           evidence=[f"{uta}"],
-                           evidence_card=[2])
-    model.add_cpds(cpd_t_ext)
-
-
-    cpd_var_dict = {}
-    for var in var_aule_list:
-        for aula in aule:
-            key = f"cpd_{var}_{aula}"
-            cpd = TabularCPD(
-                variable=f"{var}_{aula}",
-                variable_card=2,
-                values=[[0.85, 0.15],
-                        [0.15, 0.85]],
-                evidence=[f"{uta}"],
-                evidence_card=[2]
-            )
-            cpd_var_dict[key] = cpd
-    model.add_cpds(*cpd_var_dict.values())
-
+    cpd_t_ext_KPI = TabularCPD(variable=f"t_ext_KPI_{var}",
+                               variable_card=2,
+                               values=[[0.9, 0.1],
+                                   [0.1, 0.9]],
+                               evidence=[f"{var}"],
+                               evidence_card=[2])
+    model.add_cpds(cpd_t_ext_KPI)
     # mettere i vari modelli nel dizionario, uno per ogni uta
-    models[f"model_{uta}"] = model
+    models[f"model_{var}"] = model
 
-df_evidence = pd.read_csv("data/diagnosis/anomalies_table_var/probability_table.csv")
 
-evidence = {}
-virtual_evidence = []
 
-var_inference = 'el_UTA_1_1B_5'
-aule_inference = var_inference.split("_")[2:]
-for index, row in df_evidence.iterrows():
-    evidence['Condizionamento'] = 1 # 1 = fault
-    virtual_evidence = []
-    for var_int in df_evidence.drop(columns=['Date', 'Cluster', 'Context']).columns:
-        parts = var_int.split("_")
-        if len(parts) > 2 and parts[2] in aule_inference:
-            virtual_evidence.append(
-                TabularCPD(var_int, 2, [[row[var_int]], [1 - row[var_int]]])
-            )
+df_evidence = pd.read_csv("data/diagnosis/anomalies_table_var/evidence%_el_&_var_full.csv")
 
-    inference = VariableElimination(models[f"model_{var_inference}"])
-    phi_query = inference.query([f'{var_inference}'], evidence=evidence, virtual_evidence=virtual_evidence)
-    # prob_df = prob_df.append({'el_UTA_1_1B_5_fault': phi_query.values[0], 'el_UTA_1_1B_5_normal': phi_query.values[1]}, ignore_index=True)
-    print(phi_query)
+inference_results = []
+
+for idx, row in df_evidence.iterrows():
+    date = row['date']
+    cluster = row['Cluster']
+    context = row['Context']
+    t_ext_score = row['t_ext_score']
+
+    result_row = {
+        'date': date,
+        'cluster': cluster,
+        'context': context
+    }
+
+    # Variabili target
+    var_list = df_evidence.drop(columns=['date', 'Cluster', 'Context', 't_ext_score']).columns
+
+    for var in var_list:
+        model_key = f"model_{var}"
+        if model_key not in models:
+            continue
+
+        power_kpi = f"power_KPI_{var}"
+        t_ext_kpi = f"t_ext_KPI_{var}"
+
+        # Costruisci solo le virtual evidence pertinenti al modello corrente
+        virtual_evidence = [
+            TabularCPD(power_kpi, 2, [[1 - row[var]], [row[var]]]),
+            TabularCPD(t_ext_kpi, 2, [[1 - t_ext_score], [t_ext_score]])
+        ]
+
+        # Inference sul nodo var
+        inference = VariableElimination(models[model_key])
+        phi_query = inference.query([var], virtual_evidence=virtual_evidence)
+
+        # Salva la probabilità di FAULT
+        result_row[var] = phi_query.values[1]
+
+    inference_results.append(result_row)
+
+# Salva i risultati
+inference_results_df = pd.DataFrame(inference_results)
+inference_results_df[var_list] = inference_results_df[var_list].multiply(100).round(2)
+inference_results_df.to_csv("data/diagnosis/anomalies_table_var/inference_results.csv", index=False)
+
+
 
 
 
