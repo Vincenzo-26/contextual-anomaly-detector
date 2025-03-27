@@ -189,19 +189,22 @@ evidence_var_full = (
 cols_ev = evidence_var_full.columns.tolist()
 variable_cols_ev = sorted([col for col in cols_ev if col not in fixed])
 evidence_var_full = evidence_var_full[fixed + variable_cols_ev]
+evidence_var_full.set_index(['date', 'Context', 'Cluster', 't_ext_score'], inplace=True)
+evidence_var_full = evidence_var_full.map(lambda x: x / 8)
+evidence_var_full.reset_index(inplace=True)
 evidence_var_full.to_csv("data/diagnosis/anomalies_table_var/evidence_var_full.csv", index=False)
 
-# creazione dei dataframe time serie per ogni contesto per firme energetiche
-df_el_copy = extract_date_time(df_el)
-df_time_window = pd.read_csv("data/diagnosis/time_windows.csv")
-os.makedirs("data/Aule_R/ctx_timeseries", exist_ok=True)
-for i, row in df_time_window.iterrows():
-    from_time = datetime.strptime(row['from'], "%H:%M").time()
-    to_time_str = row['to']
-    if to_time_str == "24:00":
-        to_time = time(23, 59, 59, 999999)
-    else:
-        to_time = datetime.strptime(to_time_str, "%H:%M").time()
-    ctx_df = df_el_copy[(df_el_copy['time'] >= from_time) & (df_el_copy['time'] < to_time)].copy()
-    ctx_filename = f"data/Aule_R/ctx_timeseries/ctx{i + 1}_data.csv"
-    ctx_df.to_csv(ctx_filename, index=False)
+# # creazione dei dataframe time serie per ogni contesto per firme energetiche
+# df_el_copy = extract_date_time(df_el)
+# df_time_window = pd.read_csv("data/diagnosis/time_windows.csv")
+# os.makedirs("data/Aule_R/ctx_timeseries", exist_ok=True)
+# for i, row in df_time_window.iterrows():
+#     from_time = datetime.strptime(row['from'], "%H:%M").time()
+#     to_time_str = row['to']
+#     if to_time_str == "24:00":
+#         to_time = time(23, 59, 59, 999999)
+#     else:
+#         to_time = datetime.strptime(to_time_str, "%H:%M").time()
+#     ctx_df = df_el_copy[(df_el_copy['time'] >= from_time) & (df_el_copy['time'] < to_time)].copy()
+#     ctx_filename = f"data/Aule_R/ctx_timeseries/ctx{i + 1}_data.csv"
+#     ctx_df.to_csv(ctx_filename, index=False)
