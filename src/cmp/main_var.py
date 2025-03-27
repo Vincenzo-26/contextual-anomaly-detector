@@ -126,7 +126,7 @@ for variable_name in df_el.columns[:-1]:
             from_dec, to_dec = context_windows[id_tw + 1]
             t_ext_score = temp_data[(temp_data["time_dec"] >= from_dec) &
                                      (temp_data["time_dec"] < to_dec)]
-            t_ext_score = t_ext_score.groupby("date")["temp"].sum().reindex(pd.to_datetime(date_labels).date, fill_value=0)
+            t_ext_score = t_ext_score.groupby("date")["temp"].mean().reindex(pd.to_datetime(date_labels).date, fill_value=0)
             evidence_table_full_partial["t_ext_score"] = t_ext_score.values
             evidence_var_full = pd.concat([evidence_var_full, evidence_table_full_partial], ignore_index=True)
 
@@ -186,7 +186,6 @@ evidence_var_full = (
     .groupby(["date", "Context", "Cluster"], as_index=False)
     .agg("max")
 )
-
 cols_ev = evidence_var_full.columns.tolist()
 variable_cols_ev = sorted([col for col in cols_ev if col not in fixed])
 evidence_var_full = evidence_var_full[fixed + variable_cols_ev]
