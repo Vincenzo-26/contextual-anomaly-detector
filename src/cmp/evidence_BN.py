@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import datetime
 from scipy.stats import norm
 from scipy.stats import zscore
+from collections import defaultdict
 
 # read dataframe
 df_el = pd.read_csv("data/Aule_R/preprocess_data/electric_data/data_el_aule_R_pre.csv")
@@ -277,7 +278,8 @@ for (context, cluster), group in grouped:
     key_el = f"fig_el_C{context}_K{cluster}"
     report_content['plots']['plot_el'][key_el] = {
         'title': f"Context {context} Cluster {cluster}",
-        'fig': fig_el.to_html(full_html=False, include_plotlyjs='cdn')
+        'fig': fig_el.to_html(full_html=False, include_plotlyjs='cdn'),
+        'date': str(data_anomala_str)  # aggiungiamo anche la data!
     }
     report_content['plots']['plot_var'][key_el] = {}
 
@@ -341,6 +343,92 @@ for (context, cluster), group in grouped:
 
         # Salva il grafico della variabile
         report_content['plots']['plot_var'][key_el][var] = fig_var.to_html(full_html=False, include_plotlyjs='cdn')
+
+# barplot inferenza
+# Barplot inferenza
+inference_results = pd.read_csv(f'data/diagnosis/anomalies_table_var/inference_results_prova.csv')
+columns_to_plot = [col for col in inference_results.columns if col not in ['date', 'Context', 'Cluster']]
+
+# Set per match con anm_el_and_var
+set_anom = set(anm_el_and_var[['date', 'Context', 'Cluster']].apply(tuple, axis=1))
+
+barplots_group_a = {}  # Per inserimento nel loop di fig_el
+barplots_group_b = []  # Per visualizzazione dopo il plot z-score
+
+# Analisi inferenza/anomalie
+summary_counts = defaultdict(lambda: {'count': 0, 'match': 0})
+variables = columns_to_plot.copy()
+
+# Mappatura rapida anomalie
+anm_dict = {
+    (str(pd.to_datetime(row['date']).date()), row['Context'], row['Cluster']): row
+    for _, row in anm_el_and_var.iterrows()
+}
+
+for _, row in inference_results.iterrows():
+    date = pd.to_datetime(row['date']).date()
+    context = int(row['Context'])
+    cluster = int(row['Cluster'])
+    key = (str(date), context, cluster)
+
+    # Costruzione barplot
+    probs = [row[var] for var in columns_to_plot]
+    max_val = max(probs) if probs else 1
+    y_max = max_val * 1.1  # +10% margine
+
+    bar_fig = go.Figure()
+    bar_fig.add_trace(go.Bar(
+        x=columns_to_plot,
+        y=probs,
+        marker_color='lightblue',
+        hovertemplate="<b>%{x}</b><br>Prob: %{y:.2f}%<extra></extra>"
+    ))
+    bar_fig.update_layout(
+        title=f"{date} - ctx {context} cls {cluster}",
+        title_x=0.5,
+        yaxis_range=[0, y_max],
+        yaxis_title="Probabilità (%)",
+        xaxis_title="Sottosistemi",
+        template="plotly_white"
+    )
+
+    barplot_html = bar_fig.to_html(full_html=False, include_plotlyjs='cdn')
+    plot_key = f"fig_el_C{context}_K{cluster}"
+
+    if key in set_anom:
+        if plot_key not in barplots_group_a:
+            barplots_group_a[plot_key] = []
+        barplots_group_a[plot_key].append(barplot_html)
+
+        # Analisi incrociata con anomalie
+        anm_row = anm_dict.get(key)
+        if anm_row is not None:
+            var_anomale = [var for var in variables if anm_row.get(var, 0) == 1]
+            n_anomale = len(var_anomale)
+            if n_anomale > 0:
+                prob_dict = {var: row[var] for var in variables}
+                top_n_vars = sorted(prob_dict, key=prob_dict.get, reverse=True)[:n_anomale]
+                match_count = sum(1 for var in var_anomale if var in top_n_vars)
+                summary_counts[n_anomale]['count'] += 1
+                summary_counts[n_anomale]['match'] += match_count
+    else:
+        barplots_group_b.append(barplot_html)
+
+# Inserimento nel report
+report_content["plot_inference_group_a"] = barplots_group_a
+report_content["plot_inference_group_b"] = barplots_group_b
+
+# Generazione elenco puntato HTML
+html_lines = ["<ul>"]
+for n in sorted(summary_counts):
+    count = summary_counts[n]['count']
+    match = summary_counts[n]['match']
+    html_lines.append(
+        f"<li>{count}/{num_anm_el_and_var} casi con {n} variabili anomala: in {match}/{count * n} casi la variabile anomala è "
+        f"risultata tra le top-{n} per probabilità.</li>"
+    )
+html_lines.append("</ul>")
+report_content["analisi_inferenza_summary"] = "\n".join(html_lines)
 
 
 output_file = f"results/reports/report_var.html"
