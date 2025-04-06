@@ -105,7 +105,7 @@ def run_cart(data: pd.DataFrame) -> pd.DataFrame:
     n_iterations += 1
 
     # Creating csv
-    file_path = os.path.join(os.path.dirname(__file__), 'data', 'diagnosis', 'time_windows.csv')
+    file_path = os.path.join(os.path.dirname(__file__), 'data', 'time_windows.csv')
     time_windows.to_csv(file_path, index=False)
     logging.info(f"📊 Cart algorithm completed successfully. Final number of time windows: {len(time_windows)}")
     return time_windows

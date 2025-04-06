@@ -16,6 +16,26 @@ from src.distancematrix.consumer.contextual_matrix_profile import ContextualMatr
 from src.distancematrix.generator.euclidean import Euclidean
 from utils_hard_rules import *
 
+"""
+OUTPUT:
+-   anomalies_var_table_overall: tante righe quante sono le combinazioni di data - contesto - cluster anomale
+    per almeno un sottocarico 
+-   evidence_var_full: tante righe quante sono le combinazioni totali di date - context - cluster, sia anomale sia
+    non anomale e per ogni sottocarico è associato il suo anomaly score nell'intervallo [0 - 8]
+-   evidence%_var_full: evidence_var_full dove gli anomaly score di ogni date-context-cluster, sia anomali che normal
+    sono trasformati in probabilità. (questo per dare delle evidenze anche alle anomalie a livello superiore non 
+    diagnosticate da almeno un sottocarico a livello inferiore)
+-   anomalies_el_&_var_table_overall: ha tante righe quanti sono le combinazioni date-context-cluster anomale
+    comuni a livello superiore e in almeno uno dei sottocarichi (potrebbero non essere tutte quelle a livello
+    superiore
+-   evidence_el_&_var_full: è anomalies_el_&_var_table_overall con le varie date-context-cluster anomali associati
+    al relativo anomaly score
+-   evidence%_el_&_var_full: evidence_el_&_var_full con anomaly score trasformato in percenutale (evidenze per rete
+    bayesiana)
+-   t_ext_score_var_full: tante righe quante sono le combinazioni totali di date - context - cluster, sia anomale 
+    sia non anomale ed è associata la temperatura media della time window relativa al contesto analizzato
+"""
+
 import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s](%(name)s) %(message)s')
@@ -23,15 +43,17 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s](%(na
 # Initialize final dataframe
 df_tot = pd.DataFrame(columns=["date", "Context", "Cluster"])
 evidence_var_full = pd.DataFrame(columns=["date", "Context", "Cluster"])
+t_ext_score_var_full = pd.DataFrame(columns=["date", "Context", "Cluster"])
 
 # Load temperature and electric data
 df_temp = pd.read_csv("data/Aule_R/raw_data/T_ext_aule_R.csv")
 df_el = pd.read_csv("data/Aule_R/raw_data/electric_data_raw/data_el_aule_R.csv")
 df_el = preprocess(df_el, df_temp)
 df_el.set_index('timestamp', inplace=True)
-df_el.rename(columns={'temp': 't_ext'}, inplace=True)
+if 'temp' in df_el.columns:
+    df_el.drop(columns='temp', inplace=True)
 
-for variable_name in df_el.columns[:-1]:
+for variable_name in df_el.columns:
     print(f'\n\033[91m{variable_name}\033[0m')
 
     raw_data = dataformat2("data/Aule_R/raw_data/electric_data_raw/data_el_aule_R.csv",variable_name,"data/Aule_R/raw_data/T_ext_aule_R.csv")
@@ -40,7 +62,7 @@ for variable_name in df_el.columns[:-1]:
 
     data, obs_per_day, obs_per_hour = process_data(raw_data, variable_name)
 
-    df_time_window = pd.read_csv("data/diagnosis/time_windows.csv")
+    df_time_window = pd.read_csv("data/time_windows.csv")
     context_windows = {
         row["id"]: (hour_to_dec(row["from"]), hour_to_dec(row["to"]))
         for _, row in df_time_window.iterrows()
@@ -55,6 +77,7 @@ for variable_name in df_el.columns[:-1]:
     anomalies_table_var = pd.DataFrame()
 
     for id_tw in range(len(df_time_window)):
+    # for id_tw in range(2):
         if id_tw == 0:
             context_start = 0
             context_end = context_start + m_context
@@ -86,6 +109,7 @@ for variable_name in df_el.columns[:-1]:
         date_labels = data.index[::obs_per_day].strftime('%Y-%m-%d')
 
         for id_cluster in range(n_group):
+        # for id_cluster in range(2):
             begin_time_group = datetime.now()
             group_name = group_df.columns[id_cluster]
             group = np.array(group_df.T)[id_cluster]
@@ -120,6 +144,7 @@ for variable_name in df_el.columns[:-1]:
                 "Cluster": id_cluster + 1,
                 variable_name: total_score
             })
+
             temp_data = data.copy()
             temp_data["date"] = temp_data.index.date
             temp_data["time_dec"] = temp_data.index.hour + temp_data.index.minute / 60
@@ -127,8 +152,15 @@ for variable_name in df_el.columns[:-1]:
             t_ext_score = temp_data[(temp_data["time_dec"] >= from_dec) &
                                      (temp_data["time_dec"] < to_dec)]
             t_ext_score = t_ext_score.groupby("date")["temp"].mean().reindex(pd.to_datetime(date_labels).date, fill_value=0)
-            evidence_table_full_partial["t_ext_score"] = t_ext_score.values
+            t_ext_score_full_partial = pd.DataFrame({
+                "date": date_labels,
+                "Context": id_tw + 1,
+                "Cluster": id_cluster + 1,
+                "t_ext_score": t_ext_score
+            })
+            # evidence_table_full_partial["t_ext_score"] = t_ext_score.values
             evidence_var_full = pd.concat([evidence_var_full, evidence_table_full_partial], ignore_index=True)
+            t_ext_score_var_full = pd.concat([t_ext_score_var_full, t_ext_score_full_partial], ignore_index=True)
 
             num_anomalies_to_show = np.count_nonzero(~np.isnan(cmp_ad_score))
             if num_anomalies_to_show > 0:
@@ -156,17 +188,16 @@ for variable_name in df_el.columns[:-1]:
     total_time = datetime.now() - begin_time
     seconds = total_time.total_seconds() % 60
     minutes = (total_time.total_seconds() // 60) % 60
-    logger.info(f"TOTAL {str(int(minutes))} min {str(int(seconds))} s")
+    logger.info(f"{variable_name} {str(int(minutes))} min {str(int(seconds))} s")
 
 fixed = ["date", "Context", "Cluster"]
-
 cols = df_tot.columns.tolist()
 variable_cols = sorted([col for col in cols if col not in fixed])
 df_tot = df_tot[fixed + variable_cols]
-df_tot.to_csv("data/diagnosis/anomalies_table_var/anomalies_var_table_overall.csv", index=False)
+df_tot.to_csv("data/diagnosis/Anomalie_tables/CMP/anomalies_var_table_overall.csv", index=False)
 
 # filtrare evidence_var_full mantenendo solo le righe che corrispondono al cluster di appartenenza per ciascuna data
-cluster_data = pd.read_csv("data/diagnosis/cluster_data.csv")
+cluster_data = pd.read_csv("data/cluster_data.csv")
 cluster_data['date'] = pd.to_datetime(cluster_data['date'])
 cluster_map = (
     cluster_data.drop_duplicates(subset='date')
@@ -179,7 +210,6 @@ evidence_var_full = pd.merge(
     on=['date', 'Cluster'],
     how='inner'
 )
-
 # fare il merge per non avere righe duplicate per le varie variabili
 evidence_var_full = (
     evidence_var_full
@@ -189,22 +219,75 @@ evidence_var_full = (
 cols_ev = evidence_var_full.columns.tolist()
 variable_cols_ev = sorted([col for col in cols_ev if col not in fixed])
 evidence_var_full = evidence_var_full[fixed + variable_cols_ev]
-evidence_var_full.set_index(['date', 'Context', 'Cluster', 't_ext_score'], inplace=True)
+evidence_var_full.to_csv("data/diagnosis/Evidence_tables/Power/CMP/evidence_var_full.csv", index=False)
+
+
+####################
+anm_table_el = pd.read_csv(f'data/anomalies_table_overall.csv') # dataframe con le anomalie elettiche
+anm_table_var = df_tot.copy()
+
+set_el = set(anm_table_el[['Date', 'Context', 'Cluster']].apply(tuple, axis=1))
+anm_el_and_var = anm_table_var[anm_table_var[['date', 'Context', 'Cluster']].apply(tuple, axis=1).isin(set_el)].reset_index(drop=True)
+anm_el_and_var.to_csv(f"data/diagnosis/Anomalie_tables/CMP/anomalies_el_&_var_table_overall.csv", index=False)
+
+evidence_var_full['date'] = evidence_var_full['date'].dt.strftime('%Y-%m-%d')
+evidence_var_full['Context'] = evidence_var_full['Context'].astype(int)
+evidence_var_full['Cluster'] = evidence_var_full['Cluster'].astype(int)
+evidence_el_and_var_full = evidence_var_full[evidence_var_full[['date', 'Context', 'Cluster']].apply(tuple, axis=1).isin(set_el)].reset_index(drop=True)
+evidence_el_and_var_full.to_csv(f"data/diagnosis/Evidence_tables/Power/CMP/evidence_el_&_var_full.csv", index=False)
+
+set_var = set(anm_table_var[['date', 'Context', 'Cluster']].apply(tuple, axis=1))
+anm_table_el['anm_var'] = anm_table_el[['Date', 'Context', 'Cluster']].apply(lambda row: tuple(row) in set_var, axis=1)
+
+num_anm_el_and_var = len(anm_el_and_var)
+num_anm_tot = len(anm_table_el)
+anm_string = (f"{num_anm_el_and_var} anomalie interne su {num_anm_tot} anomalie a livello superiore "
+              f"({round(num_anm_el_and_var/num_anm_tot*100, 1)}%)")
+
+evidence_var_full.set_index(['date', 'Context', 'Cluster'], inplace=True)
 evidence_var_full = evidence_var_full.map(lambda x: x / 8)
 evidence_var_full.reset_index(inplace=True)
-evidence_var_full.to_csv("data/diagnosis/anomalies_table_var/evidence_var_full.csv", index=False)
+evidence_var_full.to_csv(f"data/diagnosis/Evidence_tables/Power/CMP/evidence%_var_full.csv", index=False)
 
-# # creazione dei dataframe time serie per ogni contesto per firme energetiche
-# df_el_copy = extract_date_time(df_el)
-# df_time_window = pd.read_csv("data/diagnosis/time_windows.csv")
-# os.makedirs("data/Aule_R/ctx_timeseries", exist_ok=True)
-# for i, row in df_time_window.iterrows():
-#     from_time = datetime.strptime(row['from'], "%H:%M").time()
-#     to_time_str = row['to']
-#     if to_time_str == "24:00":
-#         to_time = time(23, 59, 59, 999999)
-#     else:
-#         to_time = datetime.strptime(to_time_str, "%H:%M").time()
-#     ctx_df = df_el_copy[(df_el_copy['time'] >= from_time) & (df_el_copy['time'] < to_time)].copy()
-#     ctx_filename = f"data/Aule_R/ctx_timeseries/ctx{i + 1}_data.csv"
-#     ctx_df.to_csv(ctx_filename, index=False)
+evidence_el_and_var_full = evidence_var_full[evidence_var_full[['date', 'Context', 'Cluster']].apply(tuple, axis=1).isin(set_el)].reset_index(drop=True)
+evidence_el_and_var_full.to_csv(f"data/diagnosis/Evidence_tables/Power/CMP/evidence%_el_&_var_full.csv", index=False)
+
+# ---------------------------------
+#             t-ext
+# ---------------------------------
+t_ext_score_var_full['date'] = pd.to_datetime(t_ext_score_var_full['date'])
+t_ext_score_var_full = pd.merge(
+    t_ext_score_var_full,
+    cluster_map,
+    on=['date', 'Cluster'],
+    how='inner'
+)
+t_ext_score_var_full = (
+    t_ext_score_var_full
+    .groupby(["date", "Context", "Cluster"], as_index=False)
+    .agg("max")
+)
+
+keys_anom = [tuple(x) for x in anm_el_and_var[['date', 'Context', 'Cluster']].values.tolist()]
+keys_all = [tuple(x) for x in evidence_var_full[['date', 'Context', 'Cluster']].values.tolist()]
+filtered_idx = [i for i, k in enumerate(keys_all) if k not in keys_anom]
+
+# media e dev.std per trasformazione in z-score solo delle temperatura dei dati normal
+t_ext_scores_filtered = t_ext_score_var_full.iloc[filtered_idx]['t_ext_score'].tolist()
+mean_filtered = np.mean(t_ext_scores_filtered)
+std_filtered = np.std(t_ext_scores_filtered, ddof=0)
+
+# Calcolo z-score per tutti i punti
+z_scores_all = ((t_ext_score_var_full['t_ext_score'] - mean_filtered) / std_filtered).tolist()
+t_ext_score_var_full['t_ext_Z_score'] = z_scores_all
+# trasformazione z-score in probabilità.
+# Caso 1: tangente iperbolica
+z_scores_array = np.array(z_scores_all)
+probabilities_tanh = np.tanh(np.abs(z_scores_array)) * 100
+t_ext_score_var_full['t_ext_score_tanh'] = probabilities_tanh.tolist()
+t_ext_score_var_full.to_csv("data/diagnosis/Evidence_tables/T_ext/t_ext_score_var_full.csv", index=False)
+
+total_time = datetime.now() - begin_time
+seconds = total_time.total_seconds() % 60
+minutes = (total_time.total_seconds() // 60) % 60
+logger.info(f"TOTAL {str(int(minutes))} min {str(int(seconds))} s")

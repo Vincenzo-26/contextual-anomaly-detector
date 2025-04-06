@@ -3,21 +3,39 @@ import datetime
 from scipy.stats import norm
 import plotly.graph_objects as go
 
+"""
+INPUT:
+-   time_windows.csv da "main.py" (run_CART)
+-   anomalies_table_overall.csv da "main.py"
+-   data_el_aule_R_pre.csv da "main.py"
+-   anomalies_var_table_overall.csv da "main_var.py"
+-   anomalies_el_&_var_table_overall da "main_var.py"
+-   evidence_var_full.csv da "main_var.py"
+-   evidence_el_&_var_full.csv da "main_var.py"
 
-anm_table_var = pd.read_csv('data/diagnosis/anomalies_table_var/anomalies_var_table_overall.csv')
-anm_table_el = pd.read_csv('data/diagnosis/anomalies_table_var/anomalies_el_&_var_table_overall.csv')
-df_tw = pd.read_csv("data/diagnosis/time_windows.csv")
+OUTPUT:
+-   evidence_var_full_ditrib: tante righe quante sono le combinazioni di date-context-cluster. In corrispondenza
+    di ciascuna variabile è presente 0 se l'energia [kWh] nella tw è minore della soglia di quel context-cluster
+    (calcolata a partire dai punti labelled grazie alla CMP) oppure 1 se è maggiore.
+-   anomalies_var_table_overall_distrib: è evidence_var_full_ditrib filtrato solo con le date-context-cluster risultati
+    anomali con le soglie (quindi dove c'è almeno un 1 tra i sotocarichi)
+-   evidence_el_&_var_ditrib: è evidence_var_full_ditrib filtrato solo con le date-context-cluster contemporaneamente 
+    anomali ad alto livello e a basso livello con le soglie
+"""
+
+anm_table_var = pd.read_csv('data/diagnosis/Anomalie_tables/CMP/anomalies_var_table_overall.csv')
+anm_table_el = pd.read_csv('data/diagnosis/Anomalie_tables/CMP/anomalies_el_&_var_table_overall.csv')
+df_tw = pd.read_csv("data/time_windows.csv")
 df_el = pd.read_csv("data/Aule_R/preprocess_data/electric_data/data_el_aule_R_pre.csv")
-evidence_var_full = pd.read_csv("data/diagnosis/anomalies_table_var/evidence_var_full.csv")
-
-evidence_var_and_el = pd.read_csv("data/diagnosis/anomalies_table_var/evidence_el_&_var_full.csv")
+evidence_var_full = pd.read_csv("data/diagnosis/Evidence_tables/Power/CMP/evidence_var_full.csv")
+evidence_var_and_el = pd.read_csv("data/diagnosis/Evidence_tables/Power/CMP/evidence_el_&_var_full.csv")
+anm_el = pd.read_csv('data/anomalies_table_overall.csv')
 
 df_el['timestamp'] = pd.to_datetime(df_el['timestamp'])
 df_el.set_index('timestamp', inplace=True)
 df_el.drop(columns=['temp'], inplace=True)
 
 energy_var_full = evidence_var_full.copy()
-# energy_var_full.drop(columns=['t_ext_score'], inplace=True)
 
 for idx, row in energy_var_full.iterrows():
     date = row['date']
@@ -39,13 +57,13 @@ for idx, row in energy_var_full.iterrows():
     df_slice = df_el[(df_el.index >= start_dt) & (df_el.index < end_dt)]
     #---- Calcolo energia nella sottosequenza ----#
     for var in energy_var_full.columns:
-        if (var == "date") or (var == "Cluster") or (var =="Context") or (var =="t_ext_score"):
+        if (var == "date") or (var == "Cluster") or (var =="Context"):
             continue
         energy = df_slice[var].sum() * 0.25
         energy_var_full.at[idx, var] = energy
 
     #---- Costruzione distribuzioni ----#
-variabili = [col for col in energy_var_full.columns if col not in ['date', 'Context', 'Cluster', 't_ext_score']]
+variabili = [col for col in energy_var_full.columns if col not in ['date', 'Context', 'Cluster']]
 
 set_anomali = anm_table_var[['date', 'Context', 'Cluster']].astype(str).agg('-'.join, axis=1)
 energy_var_full['key'] = energy_var_full[['date', 'Context', 'Cluster']].astype(str).agg('-'.join, axis=1)
@@ -60,7 +78,7 @@ for (context, cluster), gruppo in energy_var_clean.groupby(['Context', 'Cluster'
 
     record = {'Context': context, 'Cluster': cluster}
     for var in variabili:
-        soglia_dx = (mean[var] + 2.7 * dev_std[var])
+        soglia_dx = (mean[var] + 3 * dev_std[var]) * 1.1
         record[f'soglia_{var}'] = soglia_dx
     soglie_records.append(record)
 
@@ -88,29 +106,26 @@ for idx, row in energy_var_full.iterrows():
         soglia_dx = df_soglie.loc[
             (df_soglie['Context'] == context) & (df_soglie['Cluster'] == cluster), f'soglia_{var}'
         ].values[0]
-
         if val > soglia_dx:
             score = int(1)
-
         else:
             score = int(0)
-
         energy_scores.at[idx, var] = score
-energy_scores.to_csv('data/diagnosis/anomalies_table_var/evidence_var_full_ditrib.csv', index = False)
-mask = (energy_scores.drop(columns=['date', 'Context', 'Cluster', 't_ext_score']) == 1).any(axis=1)
-anm_table_var_distrib = energy_scores[mask]
-anm_table_var_distrib.to_csv('data/diagnosis/anomalies_table_var/anomalies_var_table_overall_distrib.csv', index = False)
 
-# #####------ evidenze per anomalie el & var ------#######
-# anm_el = pd.read_csv('data/diagnosis/anomalies_table_overall.csv')
-# set_el = set(anm_el[['Date', 'Context', 'Cluster']].apply(tuple, axis=1))
-# energy_scores['key_tuple'] = energy_scores[['date', 'Context', 'Cluster']].apply(tuple, axis=1)
-# energy_scores_filtered = energy_scores[energy_scores['key_tuple'].isin(set_el)].copy()
-# energy_scores_filtered.drop(columns='key_tuple', inplace=True)
-# energy_scores_filtered.drop(columns='key', inplace=True)
-# energy_scores_filtered.to_csv('data/diagnosis/anomalies_table_var/evidence_el_&_var_ditrib.csv', index = False)
-#
-#
+energy_scores.to_csv('data/diagnosis/Evidence_tables/Power/Soglie/evidence_var_full_ditrib.csv', index = False)
+mask = (energy_scores.drop(columns=['date', 'Context', 'Cluster']) == 1).any(axis=1)
+anm_table_var_distrib = energy_scores[mask]
+anm_table_var_distrib.to_csv('data/diagnosis/Anomalie_tables/Soglie/anomalies_var_table_overall_distrib.csv', index = False)
+
+#####------ evidenze per anomalie el & var ------#######
+set_el = set(anm_el[['Date', 'Context', 'Cluster']].apply(tuple, axis=1))
+energy_scores['key_tuple'] = energy_scores[['date', 'Context', 'Cluster']].apply(tuple, axis=1)
+energy_scores_filtered = energy_scores[energy_scores['key_tuple'].isin(set_el)].copy()
+energy_scores_filtered.drop(columns='key_tuple', inplace=True)
+energy_scores_filtered.drop(columns='key', inplace=True)
+energy_scores_filtered.to_csv('data/diagnosis/Evidence_tables/Power/Soglie/evidence_el_&_var_ditrib.csv', index = False)
+
+
 # energy_raw = pd.read_csv("data/diagnosis/anomalies_table_var/evidence_el_&_var_full.csv")
 #
 # # Colonne da sogliare
@@ -243,5 +258,3 @@ anm_table_var_distrib.to_csv('data/diagnosis/anomalies_table_var/anomalies_var_t
 #     showlegend=True
 # )
 # # fig.show()
-
-

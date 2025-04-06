@@ -121,7 +121,7 @@ if __name__ == '__main__':
             cluster=lambda x: np.where(x['date'].isin(dates_plot), f'Cluster_{cluster_id + 1}', x['cluster'])
         )
     cluster_data_plot.to_csv("cluster_data.csv", index=False)
-    cluster_data_plot.to_csv(f"data/diagnosis/cluster_data.csv", index = False)
+    cluster_data_plot.to_csv(f"data/cluster_data.csv", index = False)
 
 
     fig = px.line(cluster_data_plot, x='time', y='value', line_group='date', facet_col='cluster', color='cluster')
@@ -463,7 +463,7 @@ if __name__ == '__main__':
             # remove redundant columns
             df_anomaly_results = df_anomaly_results.loc[:, ~df_anomaly_results.columns.duplicated()]
 
-    anomalies_table_overall.to_csv("data/diagnosis/anomalies_table_overall.csv", index = False)
+    anomalies_table_overall.to_csv("data/anomalies_table_overall.csv", index = False)
     print('\n*********************\n')
     # at the end of loop on context save dataframe of results
     df_anomaly_results.to_csv(os.path.join(path_to_data, "anomaly_results.csv"))
