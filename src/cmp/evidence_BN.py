@@ -7,6 +7,7 @@ import datetime
 from scipy.stats import norm
 from scipy.stats import zscore
 from collections import defaultdict
+from power_evidence import fig_cmp_vs_distrib, metrics_cmp_soglie
 
 """
 INPUT:
@@ -49,7 +50,6 @@ t_ext_score_var_full = pd.read_csv(f'data/diagnosis/Evidence_tables/T_ext/t_ext_
 inference_results = pd.read_csv(f'data/diagnosis/Inference/CMP/inference_results.csv')
 inference_results_distrib = pd.read_csv(f'data/diagnosis/Inference/Soglie/inference_results_distrib.csv')
 r2_df_firma = pd.read_csv("data/diagnosis/r2_df_firma.csv")
-
 
 
 num_anm_el_and_var = len(anm_el_and_var)
@@ -108,7 +108,9 @@ fig_zscore.update_layout(
 
 report_content = {
     'subtitle': anm_string,
+    'plot_cmp_vs_soglie': fig_cmp_vs_distrib.to_html(full_html=False, include_plotlyjs='cdn'),
     'plot_zscore': fig_zscore.to_html(full_html=False, include_plotlyjs='cdn'),
+    'metrics_cmp_soglie' : metrics_cmp_soglie,
     'plots': {
         'plot_el': {},
         'plot_var': {},
@@ -121,7 +123,6 @@ report_content = {
 def barplot_inference(inference_results, metodo):
     columns_to_plot = [col for col in inference_results.columns if col not in ['date', 'Context', 'Cluster']]
 
-    # Mappa barplot semplice: {(plot_key, date_str): barplot_html}
     barplots = {}
 
     # Analisi inferenza/anomalie
@@ -311,9 +312,30 @@ for (context, cluster), group in grouped:
             'barplot_b': results_cmp['barplots'].get((key_el, date_str))
         }
 
-    var_columns = anm_el_and_var.columns[3:-1]  # Salta date, Context, Cluster, anm_el
+        # figure rete bayesiana
+        graph_folder = "data/diagnosis/Inference/graphs_BN"
+        graph_image_paths = []
+        anom_row = anm_el_and_var[
+            (anm_el_and_var['date'] == date_str) &
+            (anm_el_and_var['Context'] == context) &
+            (anm_el_and_var['Cluster'] == cluster)
+            ]
+        if not anom_row.empty:
+            for var in anom_row.columns:
+                if (var == "date") or (var == "Context") or (var == "Cluster"):
+                    continue
+                if anom_row.iloc[0][var] == 1:
+                    graph_filename = f"{date_str}_{context}_{cluster}_{var}.png"
+                    graph_path = os.path.join(graph_folder, graph_filename)
+                    if os.path.exists(graph_path):
+                        relative_graph_path = os.path.relpath(graph_path, start="results/reports")
+                        graph_image_paths.append(relative_graph_path)
+        report_content['plots']['plot_var'][key_el][date_str]['graph_bn'] = graph_image_paths
 
-    for var in var_columns:
+
+    for var in anm_el_and_var.columns:
+        if (var == "date") or (var == "Context") or (var == "Cluster"):
+            continue
         group_var = group[group[var] == 1]
         if group_var.empty:
             continue

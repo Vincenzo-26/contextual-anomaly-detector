@@ -8,6 +8,9 @@ import os
 import numpy as np
 import logging
 from jinja2 import Environment, FileSystemLoader
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
+import numpy as np
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s](%(name)s) %(message)s')

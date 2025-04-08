@@ -7,16 +7,16 @@ from src.cmp.utils import *
 from src.cmp.utils_hard_rules import *
 
 # Load data
-anm_table_el = pd.read_csv('data/diagnosis/anomalies_table_overall.csv')
+anm_table_el = pd.read_csv('data/anomalies_table_overall.csv')
 anm_table_el.rename(columns={"Date": "date"}, inplace=True)
 anm_table_el['date'] = pd.to_datetime(anm_table_el['date']).dt.date
 
 anomalous_days = set(anm_table_el[['date', 'Cluster', 'Context']].itertuples(index=False, name=None))
 
 # Load other datasets
-df_tw = pd.read_csv("data/diagnosis/time_windows.csv")
+df_tw = pd.read_csv("data/time_windows.csv")
 df_ctx = pd.read_csv("data/contexts.csv")
-df_cluster = pd.read_csv("data/diagnosis/cluster_data.csv")
+df_cluster = pd.read_csv("data/cluster_data.csv")
 
 # Load and process preprocessed electrical data
 df_el_preprocessed = pd.read_csv("data/Aule_R/preprocess_data/electric_data/data_el_aule_R_pre.csv")
