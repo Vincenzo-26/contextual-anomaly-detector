@@ -4,7 +4,7 @@ import os
 import numpy as np
 import logging
 
-MIN_INTERVAL_LENGTH = 2.5
+MIN_INTERVAL_LENGTH = 4
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s](%(name)s) %(message)s')

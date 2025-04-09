@@ -1,6 +1,7 @@
 import pandas as pd
 import datetime
 import plotly.express as px
+import plotly.graph_objects as go
 """
 INPUT:
 -   time_windows.csv da "main.py" (run_CART)
@@ -12,13 +13,17 @@ INPUT:
 -   evidence_el_&_var_full.csv da "main_var.py"
 
 OUTPUT:
--   evidence_var_full_ditrib: tante righe quante sono le combinazioni di date-context-cluster. In corrispondenza
-    di ciascuna variabile è presente 0 se l'energia [kWh] nella tw è minore della soglia di quel context-cluster
-    (calcolata a partire dai punti labelled grazie alla CMP) oppure 1 se è maggiore.
--   anomalies_var_table_overall_distrib: è evidence_var_full_ditrib filtrato solo con le date-context-cluster risultati
-    anomali con le soglie (quindi dove c'è almeno un 1 tra i sotocarichi)
--   evidence_el_&_var_ditrib: è evidence_var_full_ditrib filtrato solo con le date-context-cluster contemporaneamente 
-    anomali ad alto livello e a basso livello con le soglie
+evidence_var_full_ditrib → Tutte le combinazioni date-context-cluster.
+Per ciascuna variabile, 0 se l'energia nella TW è sotto soglia, 1 se è sopra, soglia calcolata dai punti labelled CMP.
+
+anomalies_var_table_overall_distrib → È evidence_var_full_ditrib filtrato, solo le combinazioni date-context-cluster 
+risultate anomale rispetto alle soglie, quindi dove c'è almeno un 1 tra i sottocarichi.
+ 
+evidence_el_&_var_ditrib → È evidence_var_full_ditrib filtrato solo con le date-context-cluster anomali elettrici (alto 
+livello).
+
+anomalies_el_&_var_table_distrib → È anomalies_var_table_overall_distrib filtrato ulteriormente solo per le 
+date-context-cluster che sono anomali anche a livello elettrico (quindi anomali con le soglie e ad alto livello).
 """
 
 anm_table_var = pd.read_csv('data/diagnosis/Anomalie_tables/CMP/anomalies_var_table_overall.csv')
@@ -151,7 +156,6 @@ metrics_cmp_soglie = {
 
 all_keys = keys_cmp.union(keys_distrib)
 
-# Prepara dataframe filtrati sulle chiavi totali
 cmp_all = anm_table_el_and_var[
     anm_table_el_and_var[['date', 'Context', 'Cluster']].apply(tuple, axis=1).isin(all_keys)
 ].set_index(['date', 'Context', 'Cluster'])
@@ -160,30 +164,38 @@ distrib_all = anm_el_and_var_distrib[
     anm_el_and_var_distrib[['date', 'Context', 'Cluster']].apply(tuple, axis=1).isin(all_keys)
 ].set_index(['date', 'Context', 'Cluster'])
 
-# Seleziona solo le colonne delle variabili (senza count_cmp ecc.)
 cmp_all = cmp_all[variabili_cmp_soglie]
 distrib_all = distrib_all[variabili_cmp_soglie]
 
-# Riempi i NaN con 0 per evitare problemi di sottrazione
 cmp_all = cmp_all.fillna(0)
 distrib_all = distrib_all.fillna(0)
 
-# Calcola differenza vettorizzata
-diff_all = distrib_all.subtract(cmp_all, fill_value=0)
+# --- Calcolo matrice di confusione ---
+tp = int(((cmp_all == 1) & (distrib_all == 1)).sum().sum())
+tn = int(((cmp_all == 0) & (distrib_all == 0)).sum().sum())
+fp = int(((cmp_all == 0) & (distrib_all == 1)).sum().sum())
+fn = int(((cmp_all == 1) & (distrib_all == 0)).sum().sum())
 
-# Conta variabili in più e in meno
-var_in_piu_totale = int((diff_all == 1).sum().sum())
-var_in_meno_totale = int((diff_all == -1).sum().sum())
+# --- Calcolo metriche ---
+precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0
+f1_score = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
 
-# Aggiorna il dizionario metriche
 metrics_cmp_soglie.update({
-    'variabili_totali_in_piu_distrib': var_in_piu_totale,
-    'variabili_totali_in_meno_distrib': var_in_meno_totale
+    'true_positive': tp,
+    'true_negative': tn,
+    'false_positive': fp,
+    'false_negative': fn,
+    'precision': round(precision, 3),
+    'recall': round(recall, 3),
+    'accuracy': round(accuracy, 3),
+    'f1_score': round(f1_score, 3)
 })
 
-# --------------------------------------
-#            Figura plotly
-# --------------------------------------
+# -------------------------------------------
+#            Figura metriche per report
+# -------------------------------------------
 
 variabili_cmp = [col for col in anm_table_el_and_var.columns if col not in ['date', 'Context', 'Cluster']]
 variabili_distrib = [col for col in anm_table_var_distrib.columns if col not in ['date', 'Context', 'Cluster']]
@@ -210,14 +222,12 @@ for key in set_el:
 confronto_merge = pd.DataFrame(confronto_records)
 
 grouped_confronto = confronto_merge.groupby(['count_cmp', 'count_distrib']).size().reset_index(name='counts')
-
 cmp_vars_dict = {
     tuple(row[['date', 'Context', 'Cluster']]): [
         var for var in variabili_cmp if row[var] == 1
     ]
     for _, row in anm_table_el_and_var.iterrows()
 }
-
 distrib_vars_dict = {
     tuple(row[['date', 'Context', 'Cluster']]): [
         var for var in variabili_distrib if row[var] == 1
@@ -302,142 +312,82 @@ fig_cmp_vs_distrib.update_layout(
 # fig_cmp_vs_distrib.show()
 
 
+def plot_cmp_vs_soglia(sottocarico, context, cluster):
+    df_normali = energy_var_full[
+        (energy_var_full['Context'] == context) &
+        (energy_var_full['Cluster'] == cluster)
+    ]
+    set_anomali_cmp = set(tuple(x) for x in anm_table_var[['date', 'Context', 'Cluster']].values)
+    df_normali = df_normali[
+        ~df_normali[['date', 'Context', 'Cluster']].apply(tuple, axis=1).isin(set_anomali_cmp)
+    ]
+    valori_normali = df_normali[sottocarico]
+    media_normali = valori_normali.mean()
+    std_normali = valori_normali.std()
+    soglia_dinamica = (media_normali + 3 * std_normali) * 1.1
+    media_plus_std = media_normali + std_normali
+    df_anomali_cmp = energy_var_full[
+        (energy_var_full['Context'] == context) &
+        (energy_var_full['Cluster'] == cluster)
+    ]
+    key_anm_cmp = anm_table_var.loc[
+        (anm_table_var[sottocarico] == 1) &
+        (anm_table_var['Context'] == context) &
+        (anm_table_var['Cluster'] == cluster),
+        ['date', 'Context', 'Cluster']
+    ]
+    df_anomali_cmp = df_anomali_cmp.merge(key_anm_cmp, on=['date', 'Context', 'Cluster'], how='inner')
+    valori_anomali_cmp = df_anomali_cmp[sottocarico]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=valori_normali,
+        y=[0] * len(valori_normali),
+        mode='markers',
+        marker=dict(color='skyblue', size=8),
+        text=df_normali['date'],
+        hovertemplate="%{text}<br>Energia: %{x:.2f}kWh<extra></extra>",
+        name='Normali CMP'
+    ))
+    fig.add_trace(go.Scatter(
+        x=valori_anomali_cmp,
+        y=[0] * len(valori_anomali_cmp),
+        mode='markers',
+        marker=dict(color='red', size=8),
+        text=df_anomali_cmp['date'],
+        hovertemplate="%{text}<br>Energia: %{x:.2f}kWh<extra></extra>",
+        name='Anomali CMP'
+    ))
+    fig.add_vline(
+        x=soglia_dinamica,
+        line_dash='dash',
+        line_color='red',
+        annotation_text=f"Soglia: {soglia_dinamica:.2f}",
+        annotation_position="top right"
+    )
+    fig.add_vline(
+        x=media_normali,
+        line_dash='dash',
+        line_color='blue',
+        annotation_text=f"Media: {media_normali:.2f}",
+        annotation_position="top right"
+    )
+    fig.add_vline(
+        x=media_plus_std,
+        line_dash='dash',
+        line_color='lightblue',
+        annotation_text=f"Media + σ: {media_plus_std:.2f}",
+        annotation_position="top right"
+    )
+    fig.update_layout(
+        title=f"Energia {sottocarico} (ctx {context}, clst {cluster}) - μ = {media_normali:.2f} kWh, σ = {std_normali:.2f} kWh",
+        xaxis_title="Energia nella sottosequenza",
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        showlegend=True,
+        template='plotly_white'
+    )
+    fig.show()
+
+plot_cmp_vs_soglia("el_UTA_3_3B_7", 2, 5)
 
 
-
-
-
-
-
-# energy_raw = pd.read_csv("data/diagnosis/anomalies_table_var/evidence_el_&_var_full.csv")
-#
-# # Colonne da sogliare
-# id_cols = ["date", "Context", "Cluster", "t_ext_score"]
-# var_cols = [col for col in energy_raw.columns if col not in id_cols]
-#
-# # Applica soglia 0.75 a energy_raw
-# energy_raw_binarized = energy_raw.copy()
-# energy_raw_binarized[var_cols] = (energy_raw_binarized[var_cols] >= 0.75).astype(int)
-#
-# # Aggiungiamo chiave per merge
-# energy_raw_binarized["key"] = energy_raw_binarized[["date", "Context", "Cluster"]].astype(str).agg("-".join, axis=1)
-# energy_scores_filtered["key"] = energy_scores_filtered[["date", "Context", "Cluster"]].astype(str).agg("-".join, axis=1)
-#
-# # Merge sulle chiavi
-# merged = energy_scores_filtered.merge(
-#     energy_raw_binarized,
-#     on="key",
-#     suffixes=("_score", "_binarized"),
-#     how="left"
-# )
-#
-# # Estrai differenze
-# diff_details = []
-# for _, row in merged.iterrows():
-#     for col in var_cols:
-#         val_score = row.get(f"{col}_score")
-#         val_binarized = row.get(f"{col}_binarized")
-#         if pd.notna(val_binarized) and val_score != val_binarized:
-#             diff_details.append({
-#                 "date": row["date_score"],
-#                 "Context": row["Context_score"],
-#                 "Cluster": row["Cluster_score"],
-#                 "Variable": col,
-#                 "Thresholded": val_score,
-#                 "Original (>=0.75)": val_binarized
-#             })
-#
-# # Stampa risultati
-# if diff_details:
-#     print("\n--- DIFFERENZE RISCONTRATE (filtrate sulle anomalie elettriche) ---")
-#     for d in diff_details:
-#         print(f"Data: {d['date']}, Context: {d['Context']}, Cluster: {d['Cluster']}, "
-#               f"Var: {d['Variable']} -> Distrib: {d['Thresholded']}, CMP: {d['Original (>=0.75)']}")
-# else:
-#     print("\nNessuna differenza riscontrata tra energy_scores_filtered e energy_raw sogliato a 0.75.")
-# # plot di un esempio
-# sottocarico_plot = "el_UTA_4_4B_8"
-# context_plot = 2
-# cluster_plot = 2
-#
-# df_plot = energy_var_full[
-#     (energy_var_full['Context'] == context_plot) &
-#     (energy_var_full['Cluster'] == cluster_plot)
-# ]
-# valori = df_plot[f'{sottocarico_plot}']
-#
-# key_anm_var = anm_table_var.loc[
-#     (anm_table_var[f'{sottocarico_plot}'] == 1) &
-#     (anm_table_var['Context'] == context_plot) &
-#     (anm_table_var['Cluster'] == cluster_plot),
-#     ['date', 'Context', 'Cluster']
-# ]
-# df_plot_anm = energy_var_anm.merge(key_anm_var, on=['date', 'Context', 'Cluster'], how='inner')
-# valori_anm = df_plot_anm[f'{sottocarico_plot}']
-#
-# key_anm_el = anm_table_el.loc[anm_table_el[f'{sottocarico_plot}'] == 1, ['date', 'Context', 'Cluster']]
-# df_plot_anm_and_el = df_plot_anm.merge(key_anm_el, on=['date', 'Context', 'Cluster'], how='inner')
-# valori_anm_and_el = df_plot_anm_and_el[f'{sottocarico_plot}']
-#
-# soglia = df_soglie.loc[
-#     (df_soglie['Context'] == context_plot) & (df_soglie['Cluster'] == cluster_plot), f'soglia_{sottocarico_plot}'
-# ].values[0]
-# media_plot, std_plot = stats_by_group[(context_plot, cluster_plot)][sottocarico_plot]
-# media_plus_std = media_plot + std_plot
-#
-# fig = go.Figure()
-# fig.add_trace(go.Scatter(
-#     x=valori,
-#     y=[0]*len(valori),
-#     mode='markers',
-#     marker=dict(color='skyblue', size=8),
-#     text=df_plot['date'],
-#     hovertemplate="%{text}<br>Energia: %{x:.2f}kWh<extra></extra>",
-#     name='Normal'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=valori_anm,
-#     y=[0]*len(valori_anm),
-#     mode='markers',
-#     marker=dict(color='red', size=8),
-#     text=df_plot_anm['date'],
-#     hovertemplate="%{text}<br>Energia: %{x:.2f}kWh<extra></extra>",
-#     name='Anm var'
-# ))
-# fig.add_trace(go.Scatter(
-#     x=valori_anm,
-#     y=[0]*len(valori_anm_and_el),
-#     mode='markers',
-#     marker=dict(color='darkgoldenrod', size=8),
-#     text=df_plot_anm_and_el['date'],
-#     hovertemplate="%{text}<br>Energia: %{x:.2f}kWh<extra></extra>",
-#     name='Anm el&var'
-# ))
-# fig.add_vline(
-#     x=soglia,
-#     line_dash='dash',
-#     line_color='red',
-#     annotation_text=f"Soglia: {soglia:.2f}",
-#     annotation_position="top right",
-#     name='Soglia'
-# )
-# fig.add_vline(
-#     x=media_plot,
-#     line_dash='dash',
-#     line_color='blue',
-#     name = 'Media'
-# )
-# fig.add_vline(
-#     x=media_plus_std,
-#     line_dash='dash',
-#     line_color='lightblue',
-#     name='dev.std'
-# )
-# fig.update_layout(
-#     title=f"Energia {sottocarico_plot} (ctx {context_plot} , Cls {cluster_plot}) - μ = {media_plot:.2f} kWh, σ = {std_plot:.2f} kWh",
-#     xaxis_title="Energia nella sottosequenza",
-#     yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-#     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-#     showlegend=True
-# )
-# # fig.show()
