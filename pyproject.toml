@@ -25,6 +25,7 @@ numpy = "^2.2.1"
 holidays = "^0.64"
 scikit-learn = "^1.6.1"
 loguru = "^0.7.3"
+pgmpy = "^1.0.0"
 
 
 [build-system]
