@@ -1,13 +1,10 @@
 import pandas as pd
-from sklearn.tree import DecisionTreeRegressor, _tree
-import os
 import numpy as np
-import logging
+from loguru import logger
+from sklearn.tree import DecisionTreeRegressor, _tree
+
 
 MIN_INTERVAL_LENGTH = 2.5
-
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s](%(name)s) %(message)s')
 
 
 def run_cart(data: pd.DataFrame) -> pd.DataFrame:
@@ -22,7 +19,7 @@ def run_cart(data: pd.DataFrame) -> pd.DataFrame:
     'from', 'to', 'duration', and 'node'.
     """
 
-    min_samples_leaf = int(len(data) * 0.05)
+    min_samples_leaf = int(len(data) * 0.1)
 
     # Data preparation
     data['date'] = data.index.date
@@ -104,15 +101,5 @@ def run_cart(data: pd.DataFrame) -> pd.DataFrame:
             min_samples_leaf += 500
     n_iterations += 1
 
-    # Creating csv
-    file_path = os.path.join(os.path.dirname(__file__), 'data', 'time_windows.csv')
-    time_windows.to_csv(file_path, index=False)
-    logging.info(f"📊 Cart algorithm completed successfully. Final number of time windows: {len(time_windows)}")
+    logger.info(f"📊 Cart algorithm completed successfully. Final number of time windows: {len(time_windows)}")
     return time_windows
-
-if __name__ == '__main__':
-    from utils import download_data, process_data
-    data_path = 'data/data.csv'
-    data = download_data(data_path)
-    df, obs_per_day, obs_per_hour = process_data(data, "Total_Power")
-    run_cart(df)

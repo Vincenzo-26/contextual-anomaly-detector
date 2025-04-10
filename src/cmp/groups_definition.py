@@ -1,13 +1,9 @@
 from typing import Union
 
-import logging
+from loguru import logger
 import pandas as pd
-import os
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics import silhouette_score
-
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s](%(name)s) %(message)s')
 
 
 def run_clustering(data: pd.DataFrame, df_holidays: Union[None, pd.DataFrame]) -> pd.DataFrame:
@@ -22,7 +18,7 @@ def run_clustering(data: pd.DataFrame, df_holidays: Union[None, pd.DataFrame]) -
     :return: DataFrame with the clusters. The rows are the dates and the columns are the clusters. The columns are named as 'Cluster_1', 'Cluster_2', ..., 'Cluster_n'.
     """
 
-    logging.info("🌲 Running Hierarchical clustering algorithm with ward linkage method.")
+    logger.info("🌲 Running Hierarchical clustering algorithm with ward linkage method.")
 
     data['date'] = data.index.date
     data['time'] = data.index.time
@@ -48,7 +44,7 @@ def run_clustering(data: pd.DataFrame, df_holidays: Union[None, pd.DataFrame]) -
     # Hierarchical clustering
     df_working_days = data[~data['date'].isin(set(Cluster1['date']).union(set(Cluster2['date'])))][
         ['value', 'date', 'time']]
-    wd_daily_matrix = df_working_days.pivot(index='date', columns='time', values='value')
+    wd_daily_matrix = df_working_days.pivot(index='date', columns='time', values='value').dropna(axis=1)
     range_clusters = range(3, 5)
     silhouette_scores = []
     for n_clusters in range_clusters:
@@ -70,17 +66,5 @@ def run_clustering(data: pd.DataFrame, df_holidays: Union[None, pd.DataFrame]) -
             wd_daily_matrix[wd_daily_matrix['Cluster'] == i].index
         )
 
-    # Creating csv
-    file_path = os.path.join(os.path.dirname(__file__), 'data', 'group_cluster_new.csv')
-    group_cluster_df.to_csv(file_path, index=False)
-
-    logging.info(f"📊 Clustering algorithm completed successfully. Final number of cluster: {optimal_clusters + 2}")
+    logger.info(f"📊 Clustering algorithm completed successfully. Final number of cluster: {optimal_clusters + 2}")
     return group_cluster_df
-
-
-if __name__ == '__main__':
-    from utils import download_data, process_data
-    data_path = 'data/data.csv'
-    data = download_data(data_path)
-    df, obs_per_day, obs_per_hour = process_data(data, "Total_Power")
-    run_clustering(df, None)

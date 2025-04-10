@@ -220,17 +220,10 @@ def process_data(data_raw: pd.DataFrame, variable: str) -> tuple:
     :return obs_per_hour: number of observations per hour
     """
     try:
-        # subset the dataset into 3 columns
-        data_raw = data_raw[['timestamp', variable, 'temp']]
-        # rename columns
-        data_raw = data_raw.rename(columns={variable: "value"})
-        # convert timestamp to datetime
-        data_raw['timestamp'] = pd.to_datetime(data_raw['timestamp'])
-        data_raw = data_raw.set_index('timestamp')
+        data_raw.index = pd.to_datetime(data_raw.index)
         # a little preprocessing if necessary
         data_process = data_raw.copy()
         data_process['value'] = data_process['value'].interpolate(method='linear')
-        data_process['temp'] = data_process['temp'].interpolate(method='linear')
         # calculate observation per day
         obs_per_hour = int(np.median(data_process.resample('1h').count()))  # [observation/hour]
         obs_per_day = int(np.median(data_process.resample('1d').count()))  # [observation/day]

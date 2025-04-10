@@ -1,0 +1,14 @@
+{
+  "case_study": "AuleR",
+  "holidays": "IT",
+  "Load Tree": {
+    "Total": {
+      "QE Pompe": {},
+      "QE UTA 1_1B_5": {},
+      "QE UTA 2_2B_6": {},
+      "QE UTA 3_3B_7": {},
+      "QE UTA 4_4B_8": {}
+    }
+  },
+  "Outside Temperature": "Temperature Esterna"
+}
