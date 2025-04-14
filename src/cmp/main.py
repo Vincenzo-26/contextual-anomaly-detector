@@ -17,7 +17,9 @@ from src.distancematrix.consumer.contextmanager import GeneralStaticManager
 from src.distancematrix.consumer.contextual_matrix_profile import ContextualMatrixProfile
 from src.distancematrix.generator.euclidean import Euclidean
 from src.cmp.cart_function import run_cart
-from src.cmp.clustering_function import run_clustering
+from src.cmp.clustering_function import run_clustering, run_clustering_linee
+
+from src.cmp.Linee.CMP_linee import *
 
 if __name__ == '__main__':
 
@@ -36,21 +38,18 @@ if __name__ == '__main__':
     # parser.add_argument('-country', help='The country code as defined by https://pypi.org/project/holidays/', type=str)
     # args = parser.parse_args()
 
-    variable_name = "total_power"
+    analisi = "Tesi" # Linee oppure tesi
 
-    if (variable_name.startswith("el_UTA_") or (variable_name == "total_power") or (variable_name == "el_pompe")):
+    if analisi != "Linee":
+        variable_name = "total_power"
         input_file_raw = "data/Aule_R/raw_data/electric_data_raw/data_el_aule_R.csv"
-        input_file_T_ext = "data/Aule_R/raw_data/T_ext_aule_R.csv"
+        input_file_T_ext = "data/Aule_R/raw_data/T_ext.csv"
         dataformat(input_file_raw, variable_name, input_file_T_ext)
-    elif variable_name.startswith("T_"):
-        input_file_raw = f"data/Aule_R/raw_data/raw_aula_R{variable_name.split("_")[2]}.csv"
-        dataformat_var(input_file_raw, variable_name)
 
-    input_file = "data/Aule_R/preprocess_data/electric_data/el_data_prep.csv"
-
-    # per aule R allora input_file deve essere quello del fd creato in dataformat, altrimenti basta mettere quello di data
-    # variable_name = "Total_Power"
-    # input_file = "data/data.csv"
+        input_file = "data/Aule_R/preprocess_data/electric_data/el_data_prep.csv"
+    else:
+        variable_name = "total_power_linee"
+        input_file_folder = f"data/Linee/raw_data"
 
     output_file = "results/reports/report.html"
     country = None
@@ -67,12 +66,12 @@ if __name__ == '__main__':
         'contexts': []
     }
 
-    # TODO: scommentare il codice per farlo runnare da terminale
-    # logger.info(f"Arguments: {args}")
-
-    raw_data = download_data(input_file)
     # PRE-PROCESSING DEI DATI
-    data, obs_per_day, obs_per_hour = process_data(raw_data, variable_name)
+    if analisi != "Linee":
+        raw_data = download_data(input_file)
+        data, obs_per_day, obs_per_hour = process_data(raw_data, variable_name)
+    else:
+        data, data_linee, obs_per_day, obs_per_hour = preprocess_dataset_linee(input_file_folder)
 
     if country is not None:
         df_holidays = extract_holidays(data, country)
@@ -92,13 +91,20 @@ if __name__ == '__main__':
 
     # The number of time window has been selected from CART on total electrical power,
     # results are contained in 'time_window.csv' file
-    df_time_window = run_cart(data_no_holidays.copy())
+    if analisi != "Linee":
+        df_time_window = run_cart(data_no_holidays.copy())
+    else:
+        df_time_window = create_time_window_linee(total_hours=24, timestep_minutes=15, interval_hours=3)
 
     # The context is defined as 1 hour before time window, to be consistent with other analysis,
     # results are loaded from 'm_context.csv' file
     m_context = 1  # [h]
 
-    group_df = run_clustering(data.copy(), df_holidays)
+    if analisi != "Linee":
+        group_df = run_clustering(data.copy(), df_holidays)
+    else:
+        group_df = run_clustering_linee(data.copy(), df_holidays)
+
     group_df['timestamp'] = pd.to_datetime(group_df['timestamp'])
     group_df.set_index('timestamp', inplace=True)
     n_group = group_df.shape[1]
@@ -108,6 +114,10 @@ if __name__ == '__main__':
 
     cluster_data_plot = data.copy()
     cluster_data_plot.reset_index(inplace=True)
+
+    if analisi == "Linee":
+        cluster_data_plot.rename(columns={'index': 'timestamp'}, inplace=True) # brutto ma necessario
+        cluster_data_plot['timestamp'] = pd.to_datetime(cluster_data_plot['timestamp'], errors='coerce')
     cluster_data_plot['date'] = cluster_data_plot['timestamp'].dt.date
     cluster_data_plot['time'] = cluster_data_plot['timestamp'].dt.time
     cluster_data_plot['cluster'] = 'no_cluster'
@@ -120,9 +130,11 @@ if __name__ == '__main__':
         cluster_data_plot = cluster_data_plot.assign(
             cluster=lambda x: np.where(x['date'].isin(dates_plot), f'Cluster_{cluster_id + 1}', x['cluster'])
         )
-    cluster_data_plot.to_csv("cluster_data.csv", index=False)
-    cluster_data_plot.to_csv(f"data/cluster_data.csv", index = False)
-
+    # cluster_data_plot.to_csv("cluster_data.csv", index=False)
+    if analisi != "Linee":
+        cluster_data_plot.to_csv(f"data/cluster_data.csv", index = False)
+    else:
+        cluster_data_plot.to_csv(f"data/Linee/cluster_data.csv", index = False)
 
     fig = px.line(cluster_data_plot, x='time', y='value', line_group='date', facet_col='cluster', color='cluster')
     # use viridis palette
@@ -462,12 +474,18 @@ if __name__ == '__main__':
             df_anomaly_results = pd.concat([df_anomaly_results, df_anomaly_context], axis=1)
             # remove redundant columns
             df_anomaly_results = df_anomaly_results.loc[:, ~df_anomaly_results.columns.duplicated()]
-
-    anomalies_table_overall.to_csv("data/anomalies_table_overall.csv", index = False)
     print('\n*********************\n')
-    # at the end of loop on context save dataframe of results
-    df_anomaly_results.to_csv(os.path.join(path_to_data, "anomaly_results.csv"))
-    df_contexts.to_csv(os.path.join(path_to_data, "contexts.csv"), index=False)
+    anomalies_table_overall.to_csv("data/anomalies_table_overall.csv", index = False)
+    if analisi != "Linee":
+        anomalies_table_overall.to_csv("data/anomalies_table_overall.csv", index=False)
+        # at the end of loop on context save dataframe of results
+        df_anomaly_results.to_csv(os.path.join(path_to_data, "anomaly_results.csv"))
+        df_contexts.to_csv(os.path.join(path_to_data, "contexts.csv"), index=False)
+    else:
+        anomalies_table_overall.to_csv("data/Linee/anomalies_table_overall.csv", index=False)
+        df_anomaly_results.to_csv(os.path.join(path_to_data, "linee", "anomaly_results.csv"))
+        df_contexts.to_csv(os.path.join(path_to_data,"Linee", "contexts.csv"), index=False)
+
 
     # print summary with anomalies
     # print dataset main characteristics
@@ -491,6 +509,9 @@ if __name__ == '__main__':
     # Visualise the data  with plotly line plot
     df_summary_plot = data.copy()
     df_summary_plot.reset_index(inplace=True)
+    if analisi == "Linee":
+        df_summary_plot.rename(columns={'index': 'timestamp'}, inplace=True) # brutto ma necessario
+        df_summary_plot['timestamp'] = pd.to_datetime(df_summary_plot['timestamp'], errors='coerce')
     df_summary_plot['date'] = df_summary_plot['timestamp'].dt.date
     df_summary_plot['anomaly_score'] = 0
 
