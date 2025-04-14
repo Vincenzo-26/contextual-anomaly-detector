@@ -1,0 +1,2 @@
+# Salverà un csv con media e deviazione standard per ogni sottocarico sulla potenza non anomala. QUeste cose vanno fatte solo sul fondo, quindi
+# bisogna riutilizzare la ricorsione per prendere i nodi finali. Salva nella cartella result/distribution il nome del nodo con mean e stdv

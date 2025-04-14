@@ -25,7 +25,7 @@ def run_cmp(case_study: str):
     groups = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv"), index_col=0)
     time_windows = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv"))
 
-    def traverse_tree(tree, cmp_function, results=None, **kwargs):
+    def traverse_tree(tree, function, results=None, **kwargs):
         if results is None:
             results = {}
 
@@ -33,11 +33,11 @@ def run_cmp(case_study: str):
             logger.info(f"Running CMP for {key}")
             df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{key}.csv"), index_col=0,
                              parse_dates=True)
-            result = cmp_function(data=df, groups=groups, time_windows=time_windows)
+            result = function(data=df, groups=groups, time_windows=time_windows)
             if isinstance(result, pd.DataFrame):
                 results[key] = result
             if isinstance(subtree, dict) and subtree:
-                traverse_tree(subtree, cmp_function, results, **kwargs)
+                traverse_tree(subtree, function, results, **kwargs)
 
         return results
 
