@@ -25,7 +25,7 @@ def plot_groups(case_study: str):
     first_level = list(config["Load Tree"].keys())[0]
 
     # Load the data
-    df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{first_level}.csv"), index_col=0,
+    df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{case_study}.csv"), index_col=0,
                      parse_dates=True)
     df["date"] = df.index.date
     df = df.reset_index(drop=False)

@@ -21,11 +21,10 @@ def run_groups_and_tw(case_study: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, f"config.json"), "r") as f:
         config = json.load(f)
 
-    first_level = list(config["Load Tree"].keys())[0]
     holidays = config.get("holidays", None)
 
     # Load the data
-    df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{first_level}.csv"), index_col=0, parse_dates=True)
+    df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{case_study}.csv"), index_col=0, parse_dates=True)
     df_clean, _, _ = process_data(df, variable="value")
 
     if holidays is not None:
@@ -40,9 +39,12 @@ def run_groups_and_tw(case_study: str):
     time_windows = run_cart(df)
 
     # Save the results
-    groups.to_csv(os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv"), index=False)
-    time_windows.to_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv"), index=False)
+    output_dir = os.path.join(PROJECT_ROOT, "results", case_study)
+    os.makedirs(output_dir, exist_ok=True)
+
+    groups.to_csv(os.path.join(output_dir, "groups.csv"), index=False)
+    time_windows.to_csv(os.path.join(output_dir, "time_windows.csv"), index=False)
 
 
 if __name__ == "__main__":
-    run_groups_and_tw("AuleR")
+    run_groups_and_tw("Cabina")

@@ -1,0 +1,18 @@
+{
+  "case_study": "AuleR",
+  "holidays": "IT",
+  "Load Tree": {
+    "AuleP": {
+      "Gen QE-CDZ": {},
+      "Rooftop 1": {},
+      "Rooftop 2": {},
+      "Rooftop 3": {},
+      "Rooftop 4": {},
+      "Rooftop 5": {}
+    }
+  },
+  "Outside Temperature": "Temperatura Esterna",
+  "Unit": {
+    "AuleP": "kWh"
+  }
+}

@@ -25,19 +25,24 @@ def run_cmp(case_study: str):
     groups = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv"), index_col=0)
     time_windows = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv"))
 
-    def traverse_tree(tree, function, results=None, **kwargs):
+    def traverse_tree(tree, function, results=None, level=0, **kwargs):
         if results is None:
             results = {}
 
         for key, subtree in tree.items():
-            logger.info(f"Running CMP for {key}")
-            df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{key}.csv"), index_col=0,
-                             parse_dates=True)
-            result = function(data=df, groups=groups, time_windows=time_windows)
-            if isinstance(result, pd.DataFrame):
-                results[key] = result
+            is_leaf = isinstance(subtree, dict) and len(subtree) == 0
+
+            # Esegui CMP solo se è il primo nodo (level 0) o è un nodo foglia
+            if level == 0 or is_leaf:
+                logger.info(f"Running CMP for {key}")
+                df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{key}.csv"), index_col=0,
+                                 parse_dates=True)
+                result = function(data=df, **kwargs)
+                if isinstance(result, pd.DataFrame):
+                    results[key] = result
+
             if isinstance(subtree, dict) and subtree:
-                traverse_tree(subtree, function, results, **kwargs)
+                traverse_tree(subtree, function, results, level=level + 1, **kwargs)
 
         return results
 
@@ -45,10 +50,12 @@ def run_cmp(case_study: str):
     results_dict = traverse_tree(load_tree, cmp_calculation, groups=groups, time_windows=time_windows)
 
     # Save the results
+    output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "anomaly_table")
+    os.makedirs(output_dir, exist_ok=True)
     for name, df in results_dict.items():
-        df.to_csv(os.path.join(PROJECT_ROOT, "results", case_study, "anomaly_tables", f"anomaly_table_{name}.csv"),
+        df.to_csv(os.path.join(output_dir, f"anomaly_table_{name}.csv"),
                   index=False)
 
 
 if __name__ == "__main__":
-    run_cmp("AuleR")
+    run_cmp("Cabina")
