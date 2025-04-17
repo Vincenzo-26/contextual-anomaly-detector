@@ -61,14 +61,18 @@ def find_parents_of_leaves(subtree: dict) -> list:
     return parents_of_leaves
 
 
-def prepare_case_study_data(case_study: str):
+def prepare_case_study_data(case_study: str, case_studies_to_align_on: list[str] = None):
     """
-    Prepara i dati per un dato case study:
-    - Carica il config relativo e individua i nodi da elaborare
-    - Pulisce i dati grezzi (resample/interpolazione/taglio)
-    - Converte l'unità in watt se necessario
-    - Allinea tutti i dataset su un intervallo comune
-    - Salva i CSV per ciascun nodo e uno aggregato totale
+    Prepara i dati per un dato case study. Se vengono forniti altri case study nella lista `aligned_to`,
+    taglia l'intervallo temporale per allinearsi al sottoinsieme più restrittivo tra tutti.
+
+    Args:
+        case_study (str): Nome del case study principale da preparare.
+        case_studies_to_align_on (list[str], optional): Lista di altri case study da usare per allineare l'intervallo temporale.
+                                           Se None, considera solo il case study principale.
+
+    Returns:
+        None
     """
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
@@ -111,10 +115,30 @@ def prepare_case_study_data(case_study: str):
         if common_end is None or end < common_end:
             common_end = end
 
+    if case_studies_to_align_on is None:
+        case_studies_to_align_on = []
+
+    for other in case_studies_to_align_on:
+        print(f"🔍 Analizzo {other} per allineamento temporale...")
+        other_path = os.path.join(PROJECT_ROOT, "data", other, f"{other}.csv")
+        if not os.path.exists(other_path):
+            print(f"⚠️ CSV non trovato per {other}")
+            continue
+
+        df_other = pd.read_csv(other_path, index_col=0, parse_dates=True)
+        df_other = clean_time_series(df_other)
+
+        start_o, end_o = df_other.index.min(), df_other.index.max()
+        if start_o > common_start:
+            common_start = start_o
+        if end_o < common_end:
+            common_end = end_o
+
+    aligned_index = pd.date_range(common_start, common_end, freq="15min")
+
     output_dir = os.path.join(PROJECT_ROOT, "data", case_study)
     os.makedirs(output_dir, exist_ok=True)
 
-    aligned_index = pd.date_range(common_start, common_end, freq="15min")
     list_df = []
 
     for leaf, df_clean in cleaned_data.items():
@@ -150,4 +174,4 @@ def prepare_case_study_data(case_study: str):
 
 
 if __name__ == "__main__":
-    prepare_case_study_data("Cabina")
+    prepare_case_study_data("AuleP", ["AuleR"])
