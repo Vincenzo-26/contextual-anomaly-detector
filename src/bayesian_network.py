@@ -1,73 +1,7 @@
-import pandas as pd
 from pgmpy.models import BayesianNetwork
 from pgmpy.factors.discrete import TabularCPD
-import os
-import json
-from settings import PROJECT_ROOT
 from itertools import product
-from src.prepare_case_study_data import find_parents_of_leaves
-
-
-def merge_anomaly_tables(sottocarico):
-    anomaly_folder = os.path.join(PROJECT_ROOT, "results", sottocarico, "anomaly_table")
-    merged = None
-
-    for file in os.listdir(anomaly_folder):
-        if file.endswith(".csv") and file.startswith("anomaly_table_"):
-            file_path = os.path.join(anomaly_folder, file)
-            df = pd.read_csv(file_path)
-            sub_name = file.replace("anomaly_table_", "").replace(".csv", "")
-
-            df = df[["Date", "Context", "Cluster"]].copy()
-            df[sub_name] = 1
-
-            if merged is None:
-                merged = df
-            else:
-                merged = pd.merge(merged, df, on=["Date", "Context", "Cluster"], how="outer")
-
-    if merged is not None:
-        cols = ["Date", "Context", "Cluster"] + [c for c in merged.columns if c not in ["Date", "Context", "Cluster"]]
-        merged = merged[cols]
-        merged = merged.fillna(0).astype({col: int for col in merged.columns if col not in ["Date", "Context", "Cluster"]})
-
-        output_path = os.path.join(anomaly_folder, "anomaly_table_overall.csv")
-        merged.to_csv(output_path, index=False)
-        print(f"✅ Anomaly table creato per '{sottocarico}'")
-    else:
-        print(f"⚠️ Nessun file trovato per {sottocarico}")
-    return merged
-def get_children_of_node(load_tree: dict, node: str) -> list:
-    """
-    Cerca i figli diretti di un nodo all'interno del Load Tree.
-    """
-    for parent, children in load_tree.items():
-        if parent == node:
-            return list(children.keys())
-        # Ricorsione: cerca nei figli
-        found = get_children_of_node(children, node)
-        if found:
-            return found
-    return []
-
-def find_leaf_nodes(subtree: dict) -> list:
-    """
-    Ricorsivamente restituisce i nomi dei nodi foglia (cioè nodi che hanno un dict vuoto).
-    """
-    leaf_nodes = []
-
-    for key, value in subtree.items():
-        if isinstance(value, dict):
-            if not value:
-                # Se il valore è un dizionario vuoto, è una foglia
-                leaf_nodes.append(key)
-            else:
-                # Ricorsione nei figli
-                leaf_nodes.extend(find_leaf_nodes(value))
-
-    return leaf_nodes
-
-
+from src.utils import *
 
 
 def build_BN_structural_model(case_study: str):

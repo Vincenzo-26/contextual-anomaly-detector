@@ -1,67 +1,7 @@
-import os
-import pandas as pd
+from utils import *
 import json
-from settings import PROJECT_ROOT
 
-
-
-
-def clean_time_series(df: pd.DataFrame, unit: str = "W") -> pd.DataFrame:
-    """
-    Pulisce e riallinea un DataFrame temporale con indice datetime.
-    Converte in watt se i dati sono in kWh o Wh.
-    """
-    df = df.sort_index()
-    df = df[~df.index.duplicated(keep='first')]
-
-    start = df.index.min()
-    end = df.index.max()
-
-    full_index = pd.date_range(start=start, end=end, freq="15min")
-    df = df.reindex(full_index)
-    df = df.interpolate(method="time")
-    df = df[df.index.minute.isin([0, 15, 30, 45])]
-
-    first_day = df.index[0].normalize()
-    if df[df.index.normalize() == first_day].index.min().time() != pd.Timestamp("00:00").time():
-        df = df[df.index.normalize() > first_day]
-
-    last_day = df.index[-1].normalize()
-    if df[df.index.normalize() == last_day].index.max().time() != pd.Timestamp("23:45").time():
-        df = df[df.index.normalize() < last_day]
-
-    # 🔁 Conversione in watt (se serve)
-    if unit.lower() == "kwh":
-        df = df * 4000
-    elif unit.lower() == "wh":
-        df = df * (1000 / 0.25)  # = 4000
-    elif unit.lower() == "w":
-        pass  # nessuna conversione necessaria
-    else:
-        print(f"⚠️ Unità sconosciuta: {unit} - nessuna conversione applicata.")
-
-    return df
-
-
-def find_parents_of_leaves(subtree: dict) -> list:
-    """
-    Ricorsivamente restituisce i nomi dei nodi che hanno solo figli foglia (cioè figli che sono dict vuoti).
-    """
-    parents_of_leaves = []
-
-    for key, value in subtree.items():
-        if isinstance(value, dict):
-            # Se tutti i figli di questo nodo sono foglie, aggiungilo alla lista
-            if all(isinstance(v, dict) and not v for v in value.values()):
-                parents_of_leaves.append(key)
-            else:
-                # Altrimenti continua a cercare in profondità
-                parents_of_leaves.extend(find_parents_of_leaves(value))
-
-    return parents_of_leaves
-
-
-def prepare_case_study_data(case_study: str, case_studies_to_align_on: list[str] = None):
+def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
     """
     Prepara i dati per un dato case study. Se vengono forniti altri case study nella lista `aligned_to`,
     taglia l'intervallo temporale per allinearsi al sottoinsieme più restrittivo tra tutti.
@@ -170,8 +110,5 @@ def prepare_case_study_data(case_study: str, case_studies_to_align_on: list[str]
 
     print(f"✅ avaiable data for {case_study}")
 
-
-
-
 if __name__ == "__main__":
-    prepare_case_study_data("AuleP", ["AuleR"])
+    run_data("AuleP", ["AuleR"])
