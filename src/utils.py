@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from datetime import datetime
 from settings import PROJECT_ROOT
+import json
 
 def clean_time_series(df: pd.DataFrame, unit: str = "W") -> pd.DataFrame:
     """
@@ -113,7 +114,7 @@ def merge_anomaly_tables(sottocarico: str):
         merged.to_csv(output_path, index=False)
         print(f"✅ Anomaly table creato per '{sottocarico}'")
     else:
-        print(f"⚠️ Nessun file trovato per {sottocarico}")
+        print(f"⚠️ Nessun file trovato per {sottocarico}\n")
     return merged
 
 def run_energy_in_tw(case_study: str, sottocarico: str):

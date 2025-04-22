@@ -1,7 +1,7 @@
 from find_groups_and_tw import run_groups_and_tw
 from cmp_calculation import run_cmp
 from prepare_case_study_data import run_data
-from bayesian_network import build_BN_structural_model
+from bayesian_network import run_BN
 from utils import *
 
 
@@ -24,8 +24,8 @@ run_cmp(case_study)
 for sottocarico in sottocarichi:
     run_cmp(sottocarico, case_study)
 
-# Creazione rete bayesiana
-model = build_BN_structural_model(case_study)
+# Creazione rete bayesiana e inferenza
+inference_results = run_BN(case_study)
 
 
 
