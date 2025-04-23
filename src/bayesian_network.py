@@ -115,7 +115,7 @@ def build_BN_structural_model(case_study: str):
         model.add_cpds(cpd_case_study)
     return model
 
-def run_BN(case_study: str):
+def run_BN(case_study: str, evidence_method: str):
     """
     Esegue l'inferenza bayesiana per un dato case study, utilizzando le probabilità di anomalia
     dei nodi foglia come soft evidence nella rete bayesiana.
@@ -126,6 +126,7 @@ def run_BN(case_study: str):
 
     Args:
         case_study (str): Nome del case study da analizzare.
+                evidence_method (str): Metodo utilizzato per calcolare le evidenze (es. "KDE_PDF", "HDBSCAN_KNN").
 
     Returns:
         pd.DataFrame: DataFrame con le probabilità di anomalia dei nodi interni per ciascuna riga.
@@ -137,7 +138,10 @@ def run_BN(case_study: str):
 
     foglie = find_leaf_nodes(config["Load Tree"])
 
-    evidence_path = os.path.join(PROJECT_ROOT, "results", case_study, "evidences")
+    evidence_dirname = f"Evidences_{evidence_method}"
+    evidence_path = os.path.join(PROJECT_ROOT, "results", case_study, evidence_dirname)
+    if not os.path.isdir(evidence_path):
+        raise FileNotFoundError(f"Evidenze non calcolate con questo metodo '{evidence_path}'.")
 
     dfs = []
     for foglia in foglie:
@@ -193,13 +197,13 @@ def run_BN(case_study: str):
 
     output_path = os.path.join(PROJECT_ROOT, "results", case_study, "inference_results.csv")
     df_result.to_csv(output_path, index=False)
-    print(f"✅ Inferenza completata per '{case_study}'\n")
+    print(f"✅ Inferenza completata per '{case_study}' ({evidence_method})\n")
 
     return df_result
 
 
 if __name__ == "__main__":
-     df = run_BN("Cabina")
+     df = run_BN("Cabina", "HDBSCAN_KNN")
 
 
 

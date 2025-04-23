@@ -1,4 +1,12 @@
 import os
+import json
+import pandas as pd
+import numpy as np
+from sklearn.neighbors import KNeighborsClassifier
+import hdbscan
+from scipy.spatial.distance import cdist
+from datetime import datetime
+import os
 import pandas as pd
 from datetime import datetime
 from settings import PROJECT_ROOT
@@ -128,10 +136,10 @@ def run_energy_in_tw(case_study: str, sottocarico: str):
         Returns:
             pd.DataFrame: Un dataframe con colonne [date, context, cluster, energy_Wh],
                           dove l'energia in Wh è calcolata per ciascuna finestra temporale.
-        """
 
-    results_path = os.path.join(PROJECT_ROOT, "results", case_study)
+        """
     data_path = os.path.join(PROJECT_ROOT, "data", case_study)
+    results_path = os.path.join(PROJECT_ROOT, "results", case_study)
 
     df_tw = pd.read_csv(os.path.join(results_path, "time_windows.csv"))
     df_groups = pd.read_csv(os.path.join(results_path, "groups.csv"), parse_dates=["timestamp"])
@@ -176,6 +184,39 @@ def run_energy_in_tw(case_study: str, sottocarico: str):
             })
 
     return pd.DataFrame(results)
+
+def optimize_hdbscan_cluster_size(X, min_size_start=3, max_size_ratio=0.5, step=2):
+    """
+    Trova il valore ottimale di min_cluster_size che minimizza il rumore (label -1),
+    aumentando progressivamente il valore fino a che i punti sono tutti assegnati.
+
+    Args:
+        X (np.ndarray): array (n_samples, n_features) con i dati.
+        min_size_start (int): valore iniziale per min_cluster_size.
+        max_size_ratio (float): massimo rapporto rispetto al numero di punti.
+        step (int): incremento per ogni iterazione.
+
+    Returns:
+        dict: con chiavi {"best_size", "labels", "probs", "n_noise"}
+    """
+    N = len(X)
+    max_size = max(3, int(N * max_size_ratio))
+    best_result = None
+
+    for size in range(min_size_start, max_size + 1, step):
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=size)
+        labels = clusterer.fit_predict(X)
+        probs = clusterer.probabilities_
+        n_noise = np.sum(labels == -1)
+
+        if n_noise == 0:
+            return {"best_size": size, "labels": labels, "probs": probs, "n_noise": 0}
+
+        if best_result is None or n_noise < best_result["n_noise"]:
+            best_result = {"best_size": size, "labels": labels, "probs": probs, "n_noise": n_noise}
+
+    return best_result
+
 
 
 if __name__ == "__main__":
