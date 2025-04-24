@@ -1,10 +1,9 @@
-# Salverà un csv con media e deviazione standard per ogni sottocarico sulla potenza non anomala. QUeste cose vanno fatte solo sul fondo, quindi
-# bisogna riutilizzare la ricorsione per prendere i nodi finali. Salva nella cartella result/distribution il nome del nodo con mean e stdv
 from utils import *
 import json
 from sklearn.neighbors import KernelDensity
 import numpy as np
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, confusion_matrix, precision_score, recall_score, f1_score
+from scipy.stats import percentileofscore
 
 
 def run_soft_evidence(case_study: str):
@@ -72,9 +71,9 @@ def run_soft_evidence(case_study: str):
         energy_data_full.to_csv(out_file, index=False)
     print(f"✅ evidences avaiable for '{case_study}'")
 
-def run_soft_evidence_HDBSCAN_KNN(case_study: str, alpha: float = 0.1):
+def run_soft_evidence_HDBSCAN_KNN(case_study: str, alpha: float = 0.5, threshold: float = 0.8):
     """
-    Calcola una probabilità di anomalia per ciascuna date-context-cluster combinando la distanza media dai vicini (k-NN)
+    Calcola la probabilità di anomalia per ciascuna date-context-cluster combinando la distanza media dai vicini (k-NN)
     e la probabilità di appartenenza HDBSCAN. è stato usato questo metodo perchè le distribuzioni dei punti 'normal'
     identificati dalla CMP per ogni sottocarico risultavano molto ampie e non normali.
 
@@ -150,11 +149,11 @@ def run_soft_evidence_HDBSCAN_KNN(case_study: str, alpha: float = 0.1):
             distances, _ = knn.kneighbors(X_all)
 
             dist_mean = distances.mean(axis=1)
-            d_mean = dist_mean.mean()
-            d_std = dist_mean.std() if dist_mean.std() > 0 else 1e-6
-            knn_score = np.clip((dist_mean - d_mean) / d_std, 0, None)
-            knn_prob = 1 - np.exp(-knn_score)
-
+            ref_dist_mean = dist_mean[:len(X_normal)]  # solo i punti normali usati nel kNN
+            knn_prob = np.array([
+                percentileofscore(ref_dist_mean, d, kind="mean") / 100
+                for d in dist_mean
+            ])
             idx = energy_data_full[energy_data_full["Cluster"] == main_cluster].index
             energy_data_full["key"] = (
                 energy_data_full["Date"].astype(str) + "_" +
@@ -182,8 +181,25 @@ def run_soft_evidence_HDBSCAN_KNN(case_study: str, alpha: float = 0.1):
 
     if all_results:
         df_all = pd.concat(all_results, ignore_index=True)
-        roc_auc = roc_auc_score(df_all["is_anomaly"], df_all["anomaly_prob"])
-        print(f"\n📈 ROC AUC GLOBALE (alpha={alpha}): {roc_auc:.4f}")
+
+        y_true = df_all["is_anomaly"].values
+        y_score = df_all["anomaly_prob"].values
+        roc_auc = roc_auc_score(y_true, y_score)
+
+        y_pred = (y_score > threshold).astype(int)
+
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        precision = precision_score(y_true, y_pred, zero_division=0)
+        recall = recall_score(y_true, y_pred, zero_division=0)
+        f1 = f1_score(y_true, y_pred, zero_division=0)
+
+        print(f"\n📊 Metriche globali (soglia = {threshold})")
+        print(f" - ROC AUC         : {roc_auc:.4f}")
+        print(f" - Specificità (TNR): {specificity:.4f}")
+        print(f" - Precision       : {precision:.4f}")
+        print(f" - Recall          : {recall:.4f}")
+        print(f" - F1-score        : {f1:.4f}")
 
 
 
