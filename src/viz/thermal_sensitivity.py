@@ -25,7 +25,7 @@ def plot_thermal_sensitivity(case_study: str):
 
     df_list = []
     for level in second_level:
-        df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{level}.csv"), index_col=0, parse_dates=True)
+        df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{case_study}.csv"), index_col=0, parse_dates=True)
         df_list.append(df)
 
     df_second_level = pd.concat(df_list, axis=1)

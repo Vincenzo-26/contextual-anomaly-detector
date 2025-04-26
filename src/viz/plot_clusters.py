@@ -89,4 +89,4 @@ def plot_groups(case_study: str):
 
 
 if __name__ == "__main__":
-    plot_groups("AuleR")
+    plot_groups("AuleP")

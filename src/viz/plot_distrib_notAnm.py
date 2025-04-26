@@ -135,13 +135,13 @@ def plot_hdbscan_clusters(df, foglia, main_cluster_id, save_path=None):
 if __name__ == "__main__":
 
     case_study = "Cabina"
-    sottocarico = "QE Pompe"
+    sottocarico = "QE UTA 4_4B_8"
 
-    evd_path = os.path.join(PROJECT_ROOT, "results", case_study, "Evidences")
+    evd_path = os.path.join(PROJECT_ROOT, "results", case_study, "Evidences_KDE_PDF")
     anm_path = os.path.join(PROJECT_ROOT, "results", case_study, "anomaly_table")
 
     df = pd.read_csv(os.path.join(evd_path, f"evd_{sottocarico}.csv"))
     df_anm = pd.read_csv(os.path.join(anm_path, f"anomaly_table_{sottocarico}.csv"))
 
-    # plot_energy_distribution(df, 3, 3, df_anm)
-    plot_energy_scatter_by_cluster(df, df_anm)
+    plot_energy_distribution(df, 3, 3, df_anm)
+    # plot_energy_scatter_by_cluster(df, df_anm)

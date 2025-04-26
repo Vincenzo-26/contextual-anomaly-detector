@@ -25,7 +25,7 @@ for sottocarico in sottocarichi:
     run_cmp(sottocarico, case_study)
 
 # Creazione rete bayesiana e inferenza
-inference_results = run_BN(case_study)
+inference_results = run_BN(case_study, "HDBSCAN_KNN")
 
 
 
