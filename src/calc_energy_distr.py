@@ -239,6 +239,7 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
          threshold (float, optional): Soglia di probabilità per precisione e richiamo. Default 0.8.
 
      """
+    print("\n📈 Calculating soft evidences...\n")
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
@@ -290,7 +291,7 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
                 ]
 
             if clean_subset.empty:
-                print(f"No normal data for context {context} cluster {cluster}. Skipping.")
+                print(f"No normal data for Context {context} Cluster {cluster}. Skipping.")
                 skipped_cases += 1
                 continue
 
@@ -315,7 +316,7 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
 
             # Se non ho anomalie o sono NaN, uso la sigmoide
             if anm_subset.empty or anm_subset["Energy"].isna().all():
-                print(f"No anomaly data for context {context} cluster {cluster}. Using sigmoidal anomaly probability.")
+                print(f"Ctx {context} Clst {cluster} no anomaly data    -> Using sigmoidal anomaly probability.")
 
                 max_normal = X_normal.max()
                 z = k_sigmoide * (X_apply - max_normal)
@@ -329,7 +330,7 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
 
             if np.isnan(X_anomaly).any() or len(X_anomaly) < 2:
                 print(
-                    f"Anomaly data dev.std invalid for context {context} cluster {cluster} (only 1 record). Using sigmoidal anomaly probability.")
+                    f"Ctx {context} Clst {cluster} dev.std invalid for anomaly data (only 1 record)    -> Using sigmoidal anomaly probability.")
 
                 max_normal = X_normal.max()
                 z = k_sigmoide * (X_apply - max_normal)
@@ -365,7 +366,7 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
         output_file = os.path.join(evidence_path, f"evd_{foglia}.csv")
         energy_data_full.to_csv(output_file, index=False)
 
-        print(f"Saved - Skipped {skipped_cases} context-cluster combinations due to insufficient data.\n")
+        print(f"\nSaved - Skipped {skipped_cases} Ctx-Clst combinations due to insufficient data.\n")
 
     predicted_anomalies = energy_data_full["anomaly_prob"] > threshold
     true_anomalies = energy_data_full["is_real_anomaly"]
@@ -378,20 +379,20 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
         precision = TP / (TP + FP)
         print(f"Precisione (threshold={threshold}): {precision:.3f}")
     else:
-        print(f"Nessuna predizione positiva per threshold={threshold}. Precision non definita.")
+        print(f"Precision non definita.")
 
     if TP + FN > 0:
         recall = TP / (TP + FN)
         print(f"Recall (threshold={threshold}): {recall:.3f}")
     else:
-        print(f"Nessun vero positivo atteso per threshold={threshold}. Recall non definita.")
+        print(f"Recall non definito.")
 
     # Calcolo ROC-AUC sempre, usando le probabilità continue
     try:
         roc_auc = roc_auc_score(true_anomalies, energy_data_full["anomaly_prob"])
         print(f"ROC AUC: {roc_auc:.3f}")
     except ValueError:
-        print("ROC AUC non calcolabile (serve almeno una classe positiva e una negativa).")
+        print("ROC AUC non calcolabile.")
 
 
 if __name__ == "__main__":

@@ -62,4 +62,4 @@ def run_cmp(case_study: str, groups_tw_case_study: str = None):
 
 
 if __name__ == "__main__":
-    run_cmp("AuleR", "Cabina")
+    run_cmp("AuleP", "Cabina")

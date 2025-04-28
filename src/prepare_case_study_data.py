@@ -1,87 +1,78 @@
 from utils import *
 import json
+from collections import defaultdict
 
 def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
-    """
-    Prepara i dati per un dato case study. Se vengono forniti altri case study nella lista `aligned_to`,
-    taglia l'intervallo temporale per allinearsi al sottoinsieme più restrittivo tra tutti.
+    def load_config_and_leaves(case_study_name):
+        config_path = os.path.join(PROJECT_ROOT, "data", case_study_name, "config.json")
+        if not os.path.exists(config_path):
+            print(f"⚠️ Config non trovato per {case_study_name}")
+            return None, []
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        leaf_nodes = find_parents_of_leaves(config["Load Tree"])
+        return config, leaf_nodes
 
-    Args:
-        case_study (str): Nome del case study principale da preparare.
-        case_studies_to_align_on (list[str], optional): Lista di altri case study da usare per allineare l'intervallo temporale.
-                                           Se None, considera solo il case study principale.
-
-    Returns:
-        None
-    """
-    with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
-        config = json.load(f)
-
-    leaf_nodes = find_parents_of_leaves(config["Load Tree"])
+    # Prima carichiamo il case_study principale
     cleaned_data = {}
     common_start, common_end = None, None
 
-    for leaf in leaf_nodes:
-        raw_path = os.path.join(PROJECT_ROOT, "raw_data", f"{leaf}.csv")
-        if not os.path.exists(raw_path):
-            print(f"⚠️ File non trovato: {raw_path}")
+    all_case_studies = [case_study]
+    if case_studies_to_align_on:
+        all_case_studies.extend(case_studies_to_align_on)
+
+    for cs in all_case_studies:
+        print(f"🔍 Analizzo {cs}...")
+        config, leaf_nodes = load_config_and_leaves(cs)
+        if config is None:
             continue
 
-        df = pd.read_csv(raw_path, index_col=0, parse_dates=True)
+        for leaf in leaf_nodes:
+            raw_path = os.path.join(PROJECT_ROOT, "raw_data", f"{leaf}.csv")
+            if not os.path.exists(raw_path):
+                print(f"⚠️ File non trovato: {raw_path}")
+                continue
 
-        unit_config = config.get("Unit")
-        if unit_config is None:
-            print(f"⚠️ Nessuna unità specificata nel config di '{case_study}'. Uso 'W' per default.")
-            unit = "W"
-        elif isinstance(unit_config, dict):
-            unit = unit_config.get(leaf)
-            if unit is None:
-                print(f"⚠️ Nessuna unità specificata per il nodo '{leaf}'. Uso 'W' per default.")
+            df = pd.read_csv(raw_path, index_col=0, parse_dates=True)
+
+            unit_config = config.get("Unit")
+            if unit_config is None:
                 unit = "W"
-        else:
-            unit = unit_config
+            elif isinstance(unit_config, dict):
+                unit = unit_config.get(leaf, "W")
+            else:
+                unit = unit_config
 
-        df_clean = clean_time_series(df, unit=unit)
+            df_clean = clean_time_series(df, unit=unit)
 
-        if df_clean.empty:
-            print(f"⚠️ Dataset vuoto dopo la pulizia: {leaf}")
-            continue
+            if df_clean.empty:
+                print(f"⚠️ Dataset vuoto dopo la pulizia: {leaf}")
+                continue
 
-        cleaned_data[leaf] = df_clean
+            cleaned_data[f"{cs}/{leaf}"] = df_clean
 
-        start, end = df_clean.index.min(), df_clean.index.max()
-        if common_start is None or start > common_start:
-            common_start = start
-        if common_end is None or end < common_end:
-            common_end = end
+            start, end = df_clean.index.min(), df_clean.index.max()
+            if common_start is None or start > common_start:
+                common_start = start
+            if common_end is None or end < common_end:
+                common_end = end
 
-    if case_studies_to_align_on is None:
-        case_studies_to_align_on = []
-
-    for other in case_studies_to_align_on:
-        print(f"🔍 Analizzo {other} per allineamento temporale...")
-        other_path = os.path.join(PROJECT_ROOT, "data", other, f"{other}.csv")
-        if not os.path.exists(other_path):
-            print(f"⚠️ CSV non trovato per {other}")
-            continue
-
-        df_other = pd.read_csv(other_path, index_col=0, parse_dates=True)
-        df_other = clean_time_series(df_other)
-
-        start_o, end_o = df_other.index.min(), df_other.index.max()
-        if start_o > common_start:
-            common_start = start_o
-        if end_o < common_end:
-            common_end = end_o
+    if common_start is None or common_end is None:
+        print("❌ Nessun dato valido trovato.")
+        return
 
     aligned_index = pd.date_range(common_start, common_end, freq="15min")
+    if case_studies_to_align_on:
+        print(f"📅 Intervallo comune: {common_start} ➔ {common_end} ({len(aligned_index)} punti)")
 
-    output_dir = os.path.join(PROJECT_ROOT, "data", case_study)
-    os.makedirs(output_dir, exist_ok=True)
+    # Riallineiamo e salviamo tutto
+    dfs_per_case_study = defaultdict(list)
 
-    list_df = []
+    for key, df_clean in cleaned_data.items():
+        case_dir, leaf = key.split("/", 1)
+        output_dir = os.path.join(PROJECT_ROOT, "data", case_dir)
+        os.makedirs(output_dir, exist_ok=True)
 
-    for leaf, df_clean in cleaned_data.items():
         df_aligned = df_clean.loc[common_start:common_end]
         df_aligned = df_aligned.reindex(aligned_index)
 
@@ -91,24 +82,23 @@ def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
             df_col["timestamp"] = aligned_index
             df_col = df_col[["timestamp", "value"]]
 
-            if df_col["timestamp"].is_unique and len(df_col) == len(aligned_index):
-                list_df.append(df_col)
-            else:
-                print(f"❌ Problema con: {leaf} - {col}")
-
             safe_col_name = col.replace("/", "_")
             out_path = os.path.join(output_dir, f"{safe_col_name}.csv")
             df_col.to_csv(out_path, index=False)
 
-    for i, df in enumerate(list_df):
-        assert len(df) == len(aligned_index), f"❌ Lunghezza incoerente nel DataFrame #{i}"
-        assert (df["timestamp"] == aligned_index).all(), f"❌ Timestamp non allineati nel DataFrame #{i}"
+            dfs_per_case_study[case_dir].append(df_col)
 
-    df_all = pd.concat(list_df, axis=0)
-    total_df = df_all.groupby("timestamp", as_index=False)["value"].sum()
-    total_df.to_csv(os.path.join(output_dir, f"{case_study}.csv"), index=False)
+    # Ora creiamo il totale sommato per ogni case study
+    for case_dir, dfs in dfs_per_case_study.items():
+        if dfs:
+            df_all = pd.concat(dfs, axis=0)
+            total_df = df_all.groupby("timestamp", as_index=False)["value"].sum()
+            output_dir = os.path.join(PROJECT_ROOT, "data", case_dir)
+            total_df.to_csv(os.path.join(output_dir, f"{case_dir}.csv"), index=False)
 
     print(f"✅ avaiable data for {case_study}")
 
 if __name__ == "__main__":
-    run_data("AuleP", ["AuleR"])
+    # run_data("AuleP")
+    # run_data("AuleP", ["AuleR"])
+    run_data("Cabina", ["AuleR", "AuleP"])

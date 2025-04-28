@@ -169,4 +169,4 @@ def plot_EM(case_study: str, foglia: str, context: int, cluster: int):
 
 
 if __name__ == "__main__":
-    plot_EM(case_study="Cabina", foglia="QE Pompe", context=5, cluster=3)
+    plot_EM(case_study="Cabina", foglia="QE UTA 3_3B_7", context=3, cluster=3)
