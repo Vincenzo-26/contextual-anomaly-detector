@@ -25,7 +25,7 @@ def plot_thermal_sensitivity(case_study: str):
 
     df_list = []
     for level in second_level:
-        df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{case_study}.csv"), index_col=0, parse_dates=True)
+        df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", level, f"{level}.csv"), index_col=0, parse_dates=True)
         df_list.append(df)
 
     df_second_level = pd.concat(df_list, axis=1)
@@ -83,11 +83,11 @@ def plot_thermal_sensitivity(case_study: str):
             yaxis_tickfont=dict(size=14)
         )
 
-    fig.update_layout(height=200*len(df_second_level.columns))
+    fig.update_layout(height=300*len(df_second_level.columns))
 
     fig.write_html(os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity.html"),
                    include_plotlyjs="cdn")
 
 
 if __name__ == "__main__":
-    plot_thermal_sensitivity("AuleR")
+    plot_thermal_sensitivity("Cabina")

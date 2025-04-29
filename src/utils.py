@@ -217,6 +217,60 @@ def optimize_hdbscan_cluster_size(X, min_size_start=3, max_size_ratio=0.5, step=
 
     return best_result
 
+def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: int):
+    with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
+        config = json.load(f)
+
+    results_path = os.path.join(PROJECT_ROOT, "results", case_study)
+    anomaly_path = os.path.join(results_path, "anomaly_table")
+
+    df_leaf = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{sottocarico}.csv"), index_col=0, parse_dates=True)
+    temp_file = config["Outside Temperature"]
+    df_temp = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{temp_file}.csv"), index_col=0, parse_dates=True)
+    df_temp.columns = ["Temperatura Esterna"]
+    df_leaf.columns = ["Power"]
+    df_anm = pd.read_csv(os.path.join(anomaly_path, f"anomaly_table_{sottocarico}.csv"), index_col=0, parse_dates=True)
+
+    groups = pd.read_csv(os.path.join(results_path, "groups.csv"), index_col=0, parse_dates=True)
+    time_windows = pd.read_csv(os.path.join(results_path, "time_windows.csv"))
+    time_windows['to'] = time_windows['to'].replace('24:00', '23:59')
+
+    cluster_col = f"Cluster_{cluster}"
+    cluster_series = groups[cluster_col]
+
+    if cluster_series.dtype == bool or set(cluster_series.unique()) <= {0, 1}:
+        selected_dates = cluster_series[cluster_series == True].index.date
+    else:
+        selected_dates = cluster_series[cluster_series == cluster].index.date
+
+    df_leaf = df_leaf[pd.Series(df_leaf.index.date).isin(selected_dates).values]
+
+    selected_window = time_windows[time_windows["id"] == context].iloc[0]
+    from_hour = pd.to_datetime(selected_window['from'], format='%H:%M').time()
+    to_hour = pd.to_datetime(selected_window['to'], format='%H:%M').time()
+
+    def is_in_time_window(ts):
+        t = ts.time()
+        return (from_hour <= t < to_hour)
+
+    df_leaf = df_leaf[df_leaf.index.map(is_in_time_window)]
+    df_merged = df_leaf.join(df_temp, how="inner")
+
+    if df_merged.empty:
+        print("Nessun dato trovato per il cluster e la fascia oraria selezionati.")
+        return
+
+    df_grouped = df_merged.groupby(df_merged.index.date).agg(
+        Energy=("Power", lambda x: x.sum() * 0.25 / 1000),
+        Temperature=("Temperatura Esterna", "mean")
+    )
+
+    anomalous_dates = df_anm.index.date
+    df_anomalies = df_grouped[df_grouped.index.isin(anomalous_dates)]
+    df_normals = df_grouped[~df_grouped.index.isin(anomalous_dates)]
+
+    return df_normals, df_anomalies
+
 
 
 if __name__ == "__main__":
