@@ -95,7 +95,8 @@ def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int
     fig.add_trace(go.Scatter(
         x=df_sorted["Temperature"], y=df_sorted["Energy"],
         mode='markers', name="Dati reali", marker=dict(color='skyblue'),
-        hovertemplate='Temperatura: %{x:.2f}°C<br>Energia: %{y:.2f} kWh'
+        customdata=df_sorted.index,
+        hovertemplate='Data: %{customdata}<br>Temperatura: %{x:.2f}°C<br>Energia: %{y:.2f} kWh<extra></extra>'
     ), row=1, col=1)
 
     # Aggiunta scatter delle anomalie
@@ -107,7 +108,8 @@ def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int
             mode='markers',
             name="Anomalie (CMP)",
             marker=dict(color='red', size=6),
-            hovertemplate="Temperatura: %{x:.2f}°C<br>Energia: %{y:.2f} kWh"
+            customdata=df_anomalies_sorted.index,
+            hovertemplate='Data: %{customdata}<br>Temperatura: %{x:.2f}°C<br>Energia: %{y:.2f} kWh<extra></extra>'
         ), row=1, col=1)
 
     # Linee di regressione e change point
@@ -179,8 +181,8 @@ def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int
 if __name__ == "__main__":
     plot_residuals(
         case_study="Cabina",
-        sottocarico="Rooftop 1",
-        context=2,
+        sottocarico="Rooftop 5",
+        context=1,
         cluster=3,
         penalty=10
     )
