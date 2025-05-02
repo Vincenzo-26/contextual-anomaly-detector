@@ -127,29 +127,34 @@ def merge_anomaly_tables(sottocarico: str):
 
 def run_energy_in_tw(case_study: str, sottocarico: str):
     """
-        Calcolo dell'energia per ciascuna finestra temporale per un dato sottocarico.
-
-        Args:
-            case_study (str): Nome del case_study (es. "Cabina").
-            sottocarico (str): Nome del nodo foglia (es. "QE Pompe") il cui file CSV contiene la time series.
+        Calcolo dell'energia e della temperatura media per ciascuna finestra temporale per un dato sottocarico.
 
         Returns:
-            pd.DataFrame: Un dataframe con colonne [date, context, cluster, energy_Wh],
-                          dove l'energia in Wh è calcolata per ciascuna finestra temporale.
-
-        """
+            pd.DataFrame: colonne [Date, Context, Cluster, Energy, Temperature]
+    """
     data_path = os.path.join(PROJECT_ROOT, "data", case_study)
     results_path = os.path.join(PROJECT_ROOT, "results", case_study)
+
+    # Carica file
+    with open(os.path.join(data_path, "config.json"), "r") as f:
+        config = json.load(f)
 
     df_tw = pd.read_csv(os.path.join(results_path, "time_windows.csv"))
     df_groups = pd.read_csv(os.path.join(results_path, "groups.csv"), parse_dates=["timestamp"])
     data = pd.read_csv(os.path.join(data_path, f"{sottocarico}.csv"), parse_dates=["timestamp"])
 
+    temp_file = config["Outside Temperature"]
+    df_temp = pd.read_csv(os.path.join(data_path, f"{temp_file}.csv"), parse_dates=["timestamp"])
+    df_temp.columns = ["timestamp", "Temperature"]
+
+    # Preprocess
     data["date"] = data["timestamp"].dt.date
     data["time"] = data["timestamp"].dt.time
-    data["energy_Wh"] = data["value"] * 0.25/1000
-
+    data["energy_Wh"] = data["value"] * 0.25 / 1000
     df_groups["date"] = df_groups["timestamp"].dt.date
+
+    # Join temperatura
+    data = data.merge(df_temp, on="timestamp", how="left")
 
     results = []
 
@@ -159,6 +164,7 @@ def run_energy_in_tw(case_study: str, sottocarico: str):
         row_group = df_groups[df_groups["date"] == day]
         if row_group.empty:
             continue
+
         cluster_raw = row_group.iloc[0].drop(["timestamp", "date"])
         cluster = cluster_raw[cluster_raw].index[0].split("_")[-1] if cluster_raw.any() else "Unknown"
 
@@ -166,21 +172,19 @@ def run_energy_in_tw(case_study: str, sottocarico: str):
             context = row["id"]
 
             from_time = datetime.strptime(row["from"], "%H:%M").time()
-
-            if row["to"] == "24:00":
-                to_time = datetime.strptime("23:59", "%H:%M").time()
-            else:
-                to_time = datetime.strptime(row["to"], "%H:%M").time()
+            to_time = datetime.strptime("23:59", "%H:%M").time() if row["to"] == "24:00" else datetime.strptime(row["to"], "%H:%M").time()
 
             tw_data = day_data[(day_data["time"] >= from_time) & (day_data["time"] < to_time)]
 
             energy = tw_data["energy_Wh"].sum()
+            temp_mean = tw_data["Temperature"].mean()
 
             results.append({
                 "Date": str(day),
                 "Context": int(context),
                 "Cluster": int(cluster),
-                "Energy": energy
+                "Energy": energy,
+                "Temperature": temp_mean
             })
 
     return pd.DataFrame(results)
@@ -228,6 +232,7 @@ def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: in
     temp_file = config["Outside Temperature"]
     df_temp = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{temp_file}.csv"), index_col=0, parse_dates=True)
     df_temp.columns = ["Temperatura Esterna"]
+    df_temp = df_temp.interpolate(method="time").bfill().ffill()
     df_leaf.columns = ["Power"]
     df_anm = pd.read_csv(os.path.join(anomaly_path, f"anomaly_table_{sottocarico}.csv"), index_col=0, parse_dates=True)
 

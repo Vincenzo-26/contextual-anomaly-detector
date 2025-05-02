@@ -56,52 +56,88 @@ def analyze_thermal_sensitivity_per_segment(df_normals_sorted, change_points):
     return results
 
 
-def run_change_point(case_study: str, sottocarico: str, context: int, cluster: int, penalty:int):
+def run_change_point(case_study: str, penalty: int):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
-    df_normals, df_anm = run_energy_temp(case_study, sottocarico, context, cluster)
-    df_normals_sorted = df_normals.sort_values(by="Temperature")
+    foglie = find_leaf_nodes(config["Load Tree"])
 
-    # Costruisci il segnale (Temperature, Energy)
-    signal = df_normals_sorted[["Temperature", "Energy"]].values
+    for foglia in foglie:
+        segment_results = []  # raccoglie tutto per foglia
+        groups_path = os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv")
+        groups = pd.read_csv(groups_path, parse_dates=["timestamp"])
+        groups["date"] = groups["timestamp"].dt.date
+        context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
+        cluster_cols = [col for col in groups.columns if col.startswith("Cluster_")]
 
-    # Change point detection
-    algo = rpt.Pelt(model="rbf").fit(signal)
-    change_points = algo.predict(pen=penalty)
+        for context in context_ids:
+            for cluster_col in cluster_cols:
+                cluster = int(cluster_col.split("_")[-1])
+                df_normals, df_anm = run_energy_temp(case_study, foglia, context, cluster)
 
-    print(f"\n{len(change_points)-1} change points -> {len(change_points)} segmenti")
+                if df_normals is None or df_normals.empty:
+                    print(f"⚠️  Nessun dato per {foglia} - ctx {context} cl {cluster}")
+                    segment_results.append({
+                        "Context": context,
+                        "Cluster": cluster,
+                        "Segmento": 1,
+                        "Thermal Sensitive": False
+                    })
+                    continue
 
-    # Fit modelli lineari per segmenti
-    models = []
-    preds = np.zeros(len(df_normals_sorted))
-    start = 0
-    for end in change_points:
-        X_seg = df_normals_sorted.iloc[start:end]["Temperature"].values.reshape(-1, 1)
-        y_seg = df_normals_sorted.iloc[start:end]["Energy"].values
-        model = LinearRegression().fit(X_seg, y_seg)
-        y_pred = model.predict(X_seg)
-        preds[start:end] = y_pred
-        models.append(model)
-        start = end
+                df_normals_sorted = df_normals.sort_values(by="Temperature").dropna(subset=["Temperature", "Energy"])
+                df_normals_sorted = df_normals_sorted[df_normals_sorted["Energy"] > 0]
 
-    # Calcolo residui
-    residuals = df_normals_sorted["Energy"].values - preds
+                print(
+                    f"{foglia} - ctx {context} cl {cluster} -> After drop: {len(df_normals_sorted)} rows (NaN e zero esclusi)")
 
-    # Analisi thermal sensitivity segmentata
-    analyze_thermal_sensitivity_per_segment(df_normals_sorted, change_points)
+                if len(df_normals_sorted) < 5:
+                    print(f"⚠️  Dati insufficienti dopo filtro per {foglia} - ctx {context} cl {cluster}")
+                    segment_results.append({
+                        "Context": context,
+                        "Cluster": cluster,
+                        "Segmento": 1,
+                        "Thermal Sensitive": False
+                    })
+                    continue
 
-    stat, p_value = normaltest(residuals)
-    print(f"Residual p-value: {round(p_value, 2)}")
+                print(
+                    f"{foglia} - ctx {context} cl {cluster} -> After drop: {len(df_normals_sorted)} rows (NaN e zero esclusi)"
+                )
 
-    return models, residuals, change_points, p_value
+                signal = df_normals_sorted[["Temperature", "Energy"]].values
+                algo = rpt.Pelt(model="rbf").fit(signal)
+                change_points = algo.predict(pen=penalty)
+
+                models = []
+                start = 0
+                for i, end in enumerate(change_points):
+                    X_seg = df_normals_sorted.iloc[start:end]["Temperature"].values.reshape(-1, 1)
+                    y_seg = df_normals_sorted.iloc[start:end]["Energy"].values
+                    model = LinearRegression().fit(X_seg, y_seg)
+                    models.append(model)
+
+                    segment = df_normals_sorted.iloc[start:end]
+                    metrics = check_thermal_sensitivity(segment)
+
+                    segment_results.append({
+                        "Context": context,
+                        "Cluster": cluster,
+                        "Segmento": i + 1,
+                        "Thermal Sensitive": metrics["is_thermal_sensitive"]
+                    })
+                    start = end
+
+        # Salva CSV unico per foglia
+        output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_segments")
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"thermal_segments_{foglia}.csv")
+        pd.DataFrame(segment_results).to_csv(output_file, index=False)
+
 
 
 if __name__ == "__main__":
     run_change_point(
         case_study="Cabina",
-        sottocarico="Rooftop 1",
-        context=3,
-        cluster=4,
         penalty=10
     )

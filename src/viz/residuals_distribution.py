@@ -1,105 +1,186 @@
-from src.utils import *
+import os
+import numpy as np
+import ruptures as rpt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from scipy.stats import norm
-from src.change_point_detection import run_change_point
+from sklearn.linear_model import LinearRegression
+from scipy.stats import norm, normaltest
+from sklearn.metrics import r2_score
+from src.utils import PROJECT_ROOT, run_energy_temp
 
-def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int, residuals, models, change_points, p_value):
-    df_normals, df_anm = run_energy_temp(case_study, sottocarico, context, cluster)
-    df_normals_sorted = df_normals.sort_values(by="Temperature")
 
-    threshold = 0.05
-    residual_title = f" Residui - p_value {round(p_value,2)}>{threshold} -> Normal" if p_value > threshold else \
-        (f"p_value {round(p_value,2)}<{threshold} -> Not normal")
-    firma_title = f" Firma - {len(change_points)-1} change points"
+def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int, penalty: int = 10):
+    df_normals, df_anomalies = run_energy_temp(case_study, sottocarico, context, cluster)
+    if df_normals is None or df_normals.empty:
+        print("⚠️ Dati insufficienti.")
+        return
 
-    fig = make_subplots(rows=1, cols=2, subplot_titles=(firma_title, residual_title))
-    fig.add_trace(go.Scatter(
-        x=df_normals_sorted["Temperature"],
-        y=df_normals_sorted["Energy"],
-        mode='markers',
-        name="Normal",
-        marker=dict(color='skyblue'),
-        customdata=np.expand_dims(df_normals_sorted.index.astype(str), axis=1),
-        hovertemplate="Data: %{customdata[0]}<br>Temperatura: %{x:.2f}<br>Energia: %{y:.2f}<extra></extra>"
-    ), row=1, col=1)
+    df_sorted = df_normals.sort_values(by="Temperature").dropna(subset=["Temperature", "Energy"])
+    df_sorted = df_sorted[df_sorted["Energy"] > 0]
+
+    signal = df_sorted[["Temperature", "Energy"]].values
+    algo = rpt.Pelt(model="rbf").fit(signal)
+    change_points = algo.predict(pen=penalty)
+
+    residuals_by_segment = []
+    segment_labels = []
+    thermal_sensitive_indices = []
 
     start = 0
     for i, end in enumerate(change_points):
-        X_seg = df_normals_sorted.iloc[start:end]["Temperature"].values
-        y_pred = models[i].predict(X_seg.reshape(-1, 1))
-        fig.add_trace(go.Scatter(
-            x=X_seg,
-            y=y_pred,
-            mode='lines',
-            name=f"Segmento {i+1}",
-            hovertemplate="Temperatura: %{x:.2f}<br>Energia: %{y:.2f}<extra></extra>"
-        ), row=1, col=1)
+        segment = df_sorted.iloc[start:end]
+        X = segment["Temperature"].values.reshape(-1, 1)
+        y = segment["Energy"].values
+        if len(segment) < 2:
+            start = end
+            continue
+
+        model = LinearRegression().fit(X, y)
+        y_pred = model.predict(X)
+
+        corr = np.corrcoef(X.flatten(), y)[0, 1]
+        slope = model.coef_[0]
+        r2 = r2_score(y, y_pred)
+        is_sensitive = abs(corr) > 0.5 and abs(slope) > 0.2 and r2 > 0.5
+
+        if is_sensitive:
+            residuals = y - y_pred
+            residuals_by_segment.append((residuals, i))
+            segment_labels.append(f"Segmento {i+1}")
+            thermal_sensitive_indices.append((start, end, model))
+
         start = end
 
-    for cp in change_points[:-1]:
-        x_cp = df_normals_sorted.iloc[cp]["Temperature"]
+    n_sens = len(residuals_by_segment)
+    fig = make_subplots(
+        rows=1, cols=1 + n_sens,
+        column_widths=[0.5] + [0.5 / n_sens] * n_sens if n_sens > 0 else [1],
+        subplot_titles=["Firma Energetica"] + [f"Residui {label}" for label in segment_labels]
+    )
+
+    # Reset start per il ciclo corretto
+    start = 0
+    for i, end in enumerate(change_points):
+        segment = df_sorted.iloc[start:end]
+        X = segment["Temperature"].values.reshape(-1, 1)
+        y = segment["Energy"].values
+        model = LinearRegression().fit(X, y)
+        y_pred = model.predict(X)
+
+        corr = np.corrcoef(X.flatten(), y)[0, 1]
+        slope = model.coef_[0]
+        r2 = r2_score(y, y_pred)
+        is_sensitive = abs(corr) > 0.5 and abs(slope) > 0.2 and r2 > 0.5
+
+        # Calcolo dei limiti orizzontali del segmento
+        x0 = df_sorted.iloc[start]["Temperature"]
+        x1 = df_sorted.iloc[end - 1]["Temperature"]
+        fillcolor = "rgba(0,200,0,1)" if is_sensitive else "rgba(200,0,0,1)"
+
+        # Riempimento verticale per il segmento
+        fig.add_shape(
+            type="rect",
+            x0=x0, x1=x1,
+            y0=0, y1=1,
+            xref="x1", yref="paper",
+            fillcolor=fillcolor,
+            opacity=0.2,
+            line=dict(width=0),
+            layer="below"
+        )
+
+        start = end  # aggiorno lo start alla fine del ciclo
+
+    # Punti reali
+    fig.add_trace(go.Scatter(
+        x=df_sorted["Temperature"], y=df_sorted["Energy"],
+        mode='markers', name="Dati reali", marker=dict(color='skyblue'),
+        hovertemplate='Temperatura: %{x:.2f}°C<br>Energia: %{y:.2f} kWh'
+    ), row=1, col=1)
+
+    # Aggiunta scatter delle anomalie
+    if df_anomalies is not None and not df_anomalies.empty:
+        df_anomalies_sorted = df_anomalies.sort_values(by="Temperature").dropna(subset=["Temperature", "Energy"])
         fig.add_trace(go.Scatter(
-            x=[x_cp, x_cp],
-            y=[df_normals_sorted["Energy"].min(), df_normals_sorted["Energy"].max()],
-            mode='lines',
-            line=dict(color='red', dash='dash'),
-            name="Change point",
-            showlegend=False,
-            hoverinfo="skip"
+            x=df_anomalies_sorted["Temperature"],
+            y=df_anomalies_sorted["Energy"],
+            mode='markers',
+            name="Anomalie (CMP)",
+            marker=dict(color='red', size=6),
+            hovertemplate="Temperatura: %{x:.2f}°C<br>Energia: %{y:.2f} kWh"
         ), row=1, col=1)
 
-    hist = np.histogram(residuals, bins=30)
-    bin_edges = hist[1]
-    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-    bin_width = bin_edges[1] - bin_edges[0]
-    bin_halfwidth = bin_width / 2
+    # Linee di regressione e change point
+    start = 0
+    for i, end in enumerate(change_points):
+        segment = df_sorted.iloc[start:end]
+        X = segment["Temperature"].values.reshape(-1, 1)
+        y = segment["Energy"].values
+        model = LinearRegression().fit(X, y)
+        y_pred = model.predict(X)
 
-    hover_templates = [f"Intervallo: [{x - bin_halfwidth:.2f}, {x + bin_halfwidth:.2f}]<br>Frequenza: {y}"
-                       for x, y in zip(bin_centers, hist[0])]
+        # Regressione
+        fig.add_trace(go.Scatter(
+            x=X.flatten(), y=y_pred, mode='lines', name=f"Segmento {i+1}",
+            hovertemplate='Temperatura: %{x:.2f}°C<br>Predizione: %{y:.2f} kWh'
+        ), row=1, col=1)
 
-    fig.add_trace(go.Bar(
-        x=bin_centers,
-        y=hist[0],
-        width=bin_width,
-        name="Residui",
-        marker_color='skyblue',
-        opacity=0.7,
-        hovertext=hover_templates,
-        hoverinfo="text"
-    ), row=1, col=2)
+        # Linea tratteggiata verticale solo se non è l'ultimo change point
+        if i < len(change_points) - 1:
+            x_cp = df_sorted.iloc[end - 1]["Temperature"]
+            fig.add_trace(go.Scatter(
+                x=[x_cp, x_cp],
+                y=[df_sorted["Energy"].min(), df_sorted["Energy"].max()],
+                mode='lines',
+                line=dict(color='black', dash='dash'),
+                showlegend=False
+            ), row=1, col=1)
 
-    x_vals = np.linspace(residuals.min(), residuals.max(), 200)
-    pdf_vals = norm.pdf(x_vals, loc=np.mean(residuals), scale=np.std(residuals))
-    pdf_scaled = pdf_vals * len(residuals) * bin_width
-    fig.add_trace(go.Scatter(
-        x=x_vals,
-        y=pdf_scaled,
-        mode='lines',
-        name='Normale teorica',
-        line=dict(color='black'),
-        hoverinfo='skip'
-    ), row=1, col=2)
+        start = end
 
-    fig.update_layout(template="plotly_white", title_text=f"{sottocarico}, Context {context}, Cluster {cluster}", title_x=0.5)
+    # Plot dei residui
+    for idx, (residuals, seg_index) in enumerate(residuals_by_segment):
+        hist, edges = np.histogram(residuals, bins=30)
+        bin_width = edges[1] - edges[0]
+        mu, sigma = np.mean(residuals), np.std(residuals)
+        x_norm = np.linspace(min(residuals), max(residuals), 100)
+        y_norm = norm.pdf(x_norm, mu, sigma) * len(residuals) * bin_width
+
+        fig.add_trace(go.Bar(
+            x=edges[:-1], y=hist, opacity=0.6,
+            name=f"Residui Segmento {seg_index+1}",
+            marker_color='steelblue',
+            hovertemplate=f"[%{{x:.2f}} ± {bin_width/2:.2f}]<br>Frequenza: %{{y}}<extra></extra>"
+        ), row=1, col=2 + idx)
+
+        fig.add_trace(go.Scatter(
+            x=x_norm, y=y_norm,
+            mode='lines', line=dict(dash='dot', color='black'),
+            name=f"Normale {seg_index+1}", showlegend=False
+        ), row=1, col=2 + idx)
+
+    fig.update_layout(
+        title=f"{sottocarico} | Context {context} | Cluster {cluster}",
+        template="plotly_white",
+        title_x=0.5,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5)
+    )
+
     fig.update_xaxes(title_text="Temperatura [°C]", row=1, col=1)
     fig.update_yaxes(title_text="Energia [kWh]", row=1, col=1)
-    fig.update_xaxes(title_text="Residui", row=1, col=2)
-    fig.update_yaxes(title_text="Frequenza", row=1, col=2)
+    for i in range(n_sens):
+        fig.update_xaxes(title_text="Residui", row=1, col=2+i)
+        fig.update_yaxes(title_text="Frequenza", row=1, col=2+i)
 
     fig.show()
 
-if __name__ == "__main__":
-    case_study = "Cabina"
-    sottocarico = "Rooftop 1"
-    context = 3
-    cluster = 4
 
-    models, residuals, change_points, p_value = run_change_point(
-                                                    case_study=case_study,
-                                                    sottocarico=sottocarico,
-                                                    context=context,
-                                                    cluster=cluster,
-                                                    penalty=10
-                                                )
-    plot_residuals(case_study, sottocarico, context, cluster, residuals, models, change_points, p_value)
+
+if __name__ == "__main__":
+    plot_residuals(
+        case_study="Cabina",
+        sottocarico="Rooftop 1",
+        context=2,
+        cluster=3,
+        penalty=10
+    )
