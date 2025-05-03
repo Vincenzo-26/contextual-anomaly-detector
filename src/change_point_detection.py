@@ -5,7 +5,7 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error
 import ruptures as rpt
-from src.utils import PROJECT_ROOT, find_leaf_nodes, run_energy_temp, run_energy_in_tw
+from src.utils import *
 
 def check_thermal_sensitivity(df_segment, corr_thresh=0.5, r2_thresh=0.5, slope_thresh=0.2):
     """
@@ -60,11 +60,14 @@ def run_change_point(case_study: str, penalty: int):
         config = json.load(f)
 
     foglie = find_leaf_nodes(config["Load Tree"])
-    print(f"[INFO] Avvio analisi change point per il caso studio: {case_study}")
+
+    titolo = f"Thermal sensitivity analysis for '{case_study}'🌡️"
+    print_boxed_title(titolo)
 
     any_anomalies = False
 
     for foglia in foglie:
+        print(f"[{foglia}] Processing...", end="")
         segment_results = []
         models_info = []
 
@@ -135,9 +138,9 @@ def run_change_point(case_study: str, penalty: int):
                 combined["Cluster"] = cluster
                 all_rows.append(combined)
 
-        output_segments = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_segments")
+        output_segments = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "segments")
         os.makedirs(output_segments, exist_ok=True)
-        pd.DataFrame(segment_results).to_csv(os.path.join(output_segments, f"thermal_segments_{foglia}.csv"), index=False)
+        pd.DataFrame(segment_results).to_csv(os.path.join(output_segments, f"segment_{foglia}.csv"), index=False)
 
         if all_rows and models_info:
             df_final = pd.concat(all_rows)
@@ -170,17 +173,22 @@ def run_change_point(case_study: str, penalty: int):
                         matched = True
                         break
             df_anomaly = pd.DataFrame(anomaly_data)
-            output_enriched = os.path.join(PROJECT_ROOT, "results", case_study, "residual_analysis")
-            os.makedirs(output_enriched, exist_ok=True)
-            df_anomaly.to_csv(os.path.join(output_enriched, f"residuals_{foglia}.csv"), index=False)
+            output_residuals = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "residuals")
+            os.makedirs(output_residuals, exist_ok=True)
+            df_anomaly.to_csv(os.path.join(output_residuals, f"residuals_{foglia}.csv"), index=False)
             any_anomalies = True
 
-    print("\n[✓] Change point trovati")
-    print("[✓] Sensibilità termica verificata")
+        n_segments = len(segment_results)
+        n_sensitive = sum(s["Thermal Sensitive"] for s in segment_results)
+
+        if n_sensitive > 0:
+            print(f" {n_segments} segments, {n_sensitive} thermal sensitive    -> residuals computed")
+        else:
+            print(f" {n_segments} segments, 0 thermal sensitive")
+
     if any_anomalies:
-        print("[✓] Residui e probabilità di anomalia calcolati")
-    else:
-        print("[INFO] Nessun segmento sensibile trovato, nessun residuo calcolato")
+        print("\nCalculated residuals and thermal anomaly probability ✅\n\n")
+
 
 if __name__ == "__main__":
     run_change_point(case_study="Cabina", penalty=10)

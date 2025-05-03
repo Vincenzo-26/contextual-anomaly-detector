@@ -1,3 +1,5 @@
+import numexpr
+numexpr.set_num_threads(1)
 from pgmpy.models import BayesianNetwork
 from pgmpy.factors.discrete import TabularCPD, DiscreteFactor
 from pgmpy.inference import VariableElimination
@@ -66,6 +68,7 @@ def build_BN_structural_model(case_study: str):
         cpds_condizionate = []
 
         for sottocarico in parents:
+            print(f"[{sottocarico}] Processing...", end="")
             figli = get_children_of_node(config["Load Tree"], sottocarico)
 
             df = merge_anomaly_tables(sottocarico)
@@ -94,7 +97,7 @@ def build_BN_structural_model(case_study: str):
                 evidence_card=[2 for _ in figli]
             )
             cpds_condizionate.append(cpd)
-            print(f"✅ CPD condizionata creata per '{sottocarico}'\n")
+            print(f"Anomaly table created    -> Conditional CPD created✅")
 
             # salvataggio cpd condizionate
             evidence_names = cpd.get_evidence()
@@ -115,7 +118,7 @@ def build_BN_structural_model(case_study: str):
         model.add_cpds(cpd_case_study)
     return model
 
-def run_BN(case_study: str, evidence_method: str):
+def run_BN(case_study: str):
     """
     Esegue l'inferenza bayesiana per un dato case study, utilizzando le probabilità di anomalia
     dei nodi foglia come soft evidence nella rete bayesiana.
@@ -134,18 +137,19 @@ def run_BN(case_study: str, evidence_method: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
+    titolo = "Running Bayesian Network 🔄"
+    print_boxed_title(titolo)
+
+    print("Creation of BN structural model...\n")
     model = build_BN_structural_model(case_study)
 
     foglie = find_leaf_nodes(config["Load Tree"])
 
-    evidence_dirname = f"Evidences_{evidence_method}"
-    evidence_path = os.path.join(PROJECT_ROOT, "results", case_study, evidence_dirname)
-    if not os.path.isdir(evidence_path):
-        raise FileNotFoundError(f"Evidenze non calcolate con questo metodo '{evidence_path}'.")
+    evidence_path = os.path.join(PROJECT_ROOT, "results", case_study, "soft_evidences")
 
     dfs = []
     for foglia in foglie:
-        path_csv = os.path.join(evidence_path, f"evd_{foglia}.csv")
+        path_csv = os.path.join(evidence_path, f"soft_evidence_{foglia}.csv")
         df = pd.read_csv(path_csv)
         df["foglia"] = foglia
         dfs.append(df[["Date", "Context", "Cluster", "anomaly_prob", "foglia"]])
@@ -157,9 +161,9 @@ def run_BN(case_study: str, evidence_method: str):
 
     results = []
     nodi_padri = find_parents_of_leaves(config["Load Tree"])
+    print(f"\nInference on {nodi_padri}...\n")
 
     for _, row in df_pivot.iterrows():
-
 
         model_copy = copy.deepcopy(model)
         inference = VariableElimination(model_copy)
@@ -197,13 +201,13 @@ def run_BN(case_study: str, evidence_method: str):
 
     output_path = os.path.join(PROJECT_ROOT, "results", case_study, "inference_results.csv")
     df_result.to_csv(output_path, index=False)
-    print(f"✅ Inferenza completata per '{case_study}' ({evidence_method})\n")
+    print(f"\033[92mCompleted analysis for '{case_study}' 🎉\033[0m\n")
 
     return df_result
 
 
 if __name__ == "__main__":
-     df = run_BN("Cabina", "HDBSCAN_KNN")
+     df = run_BN("Cabina")
 
 
 

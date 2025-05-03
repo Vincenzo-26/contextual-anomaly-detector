@@ -6,6 +6,8 @@ from prepare_case_study_data import run_data
 from bayesian_network import run_BN
 from calc_energy_distr import run_soft_evd_EM
 from utils import *
+from change_point_detection import run_change_point
+from calc_soft_evidence import combine_soft_evidence
 
 
 case_study = "Cabina"
@@ -29,11 +31,17 @@ run_cmp(case_study)
 for sottocarico in sottocarichi:
     run_cmp(sottocarico, case_study)
 
-# Creazione evidenze
+# Creazione energy evidences
 run_soft_evd_EM(case_study)
 
+# Creazione thermal evidences
+run_change_point(case_study, penalty=10)
+
+# Combinazione delle energy evidences e thermal evidences
+combine_soft_evidence(case_study)
+
 # Creazione rete bayesiana e inferenza
-# inference_results = run_BN(case_study, "HDBSCAN_EM")
+inference_results = run_BN(case_study)
 
 
 

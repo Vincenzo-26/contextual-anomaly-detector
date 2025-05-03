@@ -12,6 +12,14 @@ from datetime import datetime
 from settings import PROJECT_ROOT
 import json
 
+def print_boxed_title(title: str, side_padding: int = 15):
+    total_length = len(title) + side_padding * 2
+    border = "=" * total_length
+    spaces = " " * side_padding
+    print(f"\n{border}")
+    print(f"{spaces}{title}{spaces}")
+    print(f"{border}\n")
+
 def clean_time_series(df: pd.DataFrame, unit: str = "W") -> pd.DataFrame:
     """
     Pulisce e riallinea un DataFrame temporale con indice datetime.
@@ -120,9 +128,8 @@ def merge_anomaly_tables(sottocarico: str):
 
         output_path = os.path.join(anomaly_folder, "anomaly_table_overall.csv")
         merged.to_csv(output_path, index=False)
-        print(f"✅ Anomaly table creato per '{sottocarico}'")
     else:
-        print(f"⚠️ Nessun file trovato per {sottocarico}\n")
+        print(f"⚠️ No files for {sottocarico}\n")
     return merged
 
 def run_energy_in_tw(case_study: str, sottocarico: str):

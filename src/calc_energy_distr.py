@@ -2,12 +2,11 @@ import os
 os.environ["OMP_NUM_THREADS"] = "1"
 from utils import *
 import json
-from sklearn.neighbors import KernelDensity
 import numpy as np
-from sklearn.metrics import roc_auc_score, confusion_matrix, precision_score, recall_score, f1_score
-from scipy.stats import percentileofscore
+from sklearn.metrics import roc_auc_score
 from scipy.signal import find_peaks
 from sklearn.mixture import GaussianMixture
+from tabulate import tabulate
 
 
 def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0.8):
@@ -43,7 +42,9 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
          threshold (float, optional): Soglia di probabilità per precisione e richiamo. Default 0.8.
 
      """
-    print("\n📈 Calculating soft evidences...\n")
+    titolo = "Energy evidences calculation 📈"
+    print_boxed_title(titolo)
+
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
@@ -181,23 +182,28 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
 
     if TP + FP > 0:
         precision = TP / (TP + FP)
-        print(f"Precisione (threshold={threshold}): {precision:.3f}")
     else:
-        print(f"Precision non definita.")
+        precision = None
 
     if TP + FN > 0:
         recall = TP / (TP + FN)
-        print(f"Recall (threshold={threshold}): {recall:.3f}")
     else:
-        print(f"Recall non definito.")
+        recall = None
 
     # Calcolo ROC-AUC sempre, usando le probabilità continue
     try:
         roc_auc = roc_auc_score(true_anomalies, energy_data_full["anomaly_prob"])
-        print(f"ROC AUC: {roc_auc:.3f}")
     except ValueError:
-        print("ROC AUC non calcolabile.")
+        roc_auc = None
 
+    metrics = [
+        [f"Precisione (threshold={threshold})", f"{precision:.3f}" if precision is not None else "n.d."],
+        [f"Recall     (threshold={threshold})", f"{recall:.3f}" if recall is not None else "n.d."],
+        ["ROC AUC", f"{roc_auc:.3f}" if roc_auc is not None else "n.d."]
+    ]
+
+    print(tabulate(metrics, headers=["Metriche 📊", ""], tablefmt="grid"))
+    print("\n\n")
 
 if __name__ == "__main__":
     run_soft_evd_EM("Cabina")
