@@ -27,10 +27,6 @@ run_groups_and_tw(case_study)
 # CMP alto livello
 run_cmp(case_study)
 
-# CMP ai nodi foglia utilizzando groups e tw estratte ad alto livello
-for sottocarico in sottocarichi:
-    run_cmp(sottocarico, case_study)
-
 # Creazione energy evidences
 run_soft_evd_EM(case_study)
 

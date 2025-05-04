@@ -283,6 +283,21 @@ def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: in
 
     return df_normals, df_anomalies
 
+def get_nodes_by_level(load_tree: dict) -> list[list[str]]:
+    from collections import defaultdict, deque
+
+    levels_dict = defaultdict(list)
+    queue = deque([(load_tree, 0)])
+
+    while queue:
+        subtree, level = queue.popleft()
+        for parent, children in subtree.items():
+            levels_dict[level].append(parent)
+            if isinstance(children, dict):
+                queue.append((children, level + 1))
+
+    max_level = max(levels_dict.keys())
+    return [levels_dict[i] for i in reversed(range(max_level + 1))]  # bottom-up
 
 
 if __name__ == "__main__":

@@ -13,7 +13,6 @@ def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
         leaf_nodes = find_parents_of_leaves(config["Load Tree"])
         return config, leaf_nodes
 
-    # Prima carichiamo il case_study principale
     cleaned_data = {}
     common_start, common_end = None, None
 
@@ -65,7 +64,6 @@ def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
     if case_studies_to_align_on:
         print(f"📅 Intervallo comune: {common_start} ➔ {common_end} ({len(aligned_index)} punti)")
 
-    # Riallineiamo e salviamo tutto
     dfs_per_case_study = defaultdict(list)
 
     for key, df_clean in cleaned_data.items():
@@ -88,17 +86,24 @@ def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
 
             dfs_per_case_study[case_dir].append(df_col)
 
-    # Ora creiamo il totale sommato per ogni case study
-    for case_dir, dfs in dfs_per_case_study.items():
-        if dfs:
-            df_all = pd.concat(dfs, axis=0)
-            total_df = df_all.groupby("timestamp", as_index=False)["value"].sum()
-            output_dir = os.path.join(PROJECT_ROOT, "data", case_dir)
-            total_df.to_csv(os.path.join(output_dir, f"{case_dir}.csv"), index=False)
+    if case_studies_to_align_on:
+        output_dir = os.path.join(PROJECT_ROOT, "data", case_study)
+        os.makedirs(output_dir, exist_ok=True)
+
+        for sub in case_studies_to_align_on:
+            dfs = dfs_per_case_study.get(sub, [])
+            if dfs:
+                df_all = pd.concat(dfs, axis=0)
+                total_df = df_all.groupby("timestamp", as_index=False)["value"].sum()
+                total_df.to_csv(os.path.join(output_dir, f"{sub}.csv"), index=False)
+
+    if dfs_per_case_study[case_study]:
+        df_all = pd.concat(dfs_per_case_study[case_study], axis=0)
+        total_df = df_all.groupby("timestamp", as_index=False)["value"].sum()
+        output_dir = os.path.join(PROJECT_ROOT, "data", case_study)
+        total_df.to_csv(os.path.join(output_dir, f"{case_study}.csv"), index=False)
 
     print(f"✅ avaiable data for {case_study}")
 
 if __name__ == "__main__":
-    # run_data("AuleP")
-    # run_data("AuleP", ["AuleR"])
     run_data("Cabina", ["AuleR", "AuleP"])

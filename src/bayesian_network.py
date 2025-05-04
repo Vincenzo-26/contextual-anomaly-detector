@@ -7,7 +7,6 @@ from itertools import product
 from src.utils import *
 import copy
 
-
 def build_BN_structural_model(case_study: str):
     """
     Costruisce la struttura e i CPD di una rete bayesiana basata sulla struttura del load tree.
@@ -24,98 +23,74 @@ def build_BN_structural_model(case_study: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
-        def extract_edges_and_nodes(load_tree):
+        def extract_edges_and_nodes(tree):
             edges = []
-            nodes = set()
 
-            def recurse(tree):
-                for parent, children in tree.items():
-                    nodes.add(parent)
+            def recurse(subtree):
+                for parent, children in subtree.items():
                     for child in children:
-                        nodes.add(child)
-                        edges.append((child, parent))  # direzione bottom-up
+                        edges.append((child, parent))
                         recurse({child: children[child]})
 
-            recurse(load_tree)
-            return edges, nodes
+            recurse(tree)
+            return edges
 
-        # struttura della BN proveniente dalla struttura del load tree nel config
-        edges, nodes = extract_edges_and_nodes(config["Load Tree"])
+        edges = extract_edges_and_nodes(config["Load Tree"])
         model = BayesianNetwork(edges)
 
-        # Probabilità a priori dei nodi foglia (sono rimpiazzate dalle soft evidence)
+        # Aggiunta CPD a priori uniformi per le foglie
         foglie = find_leaf_nodes(config["Load Tree"])
-        cpds_foglia = []
-
-        for foglia in foglie:
-            cpd = TabularCPD(variable=foglia, variable_card=2, values=[[0.5], [0.5]])
-            cpds_foglia.append(cpd)
-
+        cpds_foglia = [TabularCPD(variable=f, variable_card=2, values=[[0.5], [0.5]]) for f in foglie]
         model.add_cpds(*cpds_foglia)
 
-        # probabilità condizionate
-        parents = find_parents_of_leaves(config["Load Tree"])
 
-        combinazioni = list(product([0, 1], repeat=len(parents)))
-        cpd_case_study = TabularCPD(
-            variable=f"{case_study}",
-            variable_card=2,
-            values=[[0.0] * len(combinazioni),  [1.0] * len(combinazioni)],
-            evidence=parents,
-            evidence_card=[2] * len(parents)
-        )
+        levels = get_nodes_by_level(config["Load Tree"])
 
-        cpds_condizionate = []
+        # Calcolo CPD condizionate per ogni nodo interno
+        for livello in levels[1:]:
+            for nodo in livello:
+                figli = get_children_of_node(config["Load Tree"], nodo)
+                if not figli:
+                    continue
 
-        for sottocarico in parents:
-            print(f"[{sottocarico}] Processing...", end="")
-            figli = get_children_of_node(config["Load Tree"], sottocarico)
+                print(f"[{nodo}] Processing...", end="")
 
-            df = merge_anomaly_tables(sottocarico)
+                df = merge_anomaly_tables(nodo)
 
-            # Frequenze condizionate
-            group = df.groupby(figli)[sottocarico].value_counts(normalize=True).unstack().fillna(0)
-            group = group[[0, 1]]
-            group = group.reset_index()
-            combinazioni = pd.DataFrame(list(product([0, 1], repeat=len(figli))), columns=figli)
-            group_completo = pd.merge(combinazioni, group, how="left", on=figli).fillna(0)
-            group_sorted = group_completo.sort_values(by=figli).drop(columns=figli)
-            values = group_sorted.T.values
+                # Frequenze condizionate
+                group = df.groupby(figli)[nodo].value_counts(normalize=True).unstack().fillna(0)
+                group = group[[0, 1]]
+                group = group.reset_index()
 
-            # Per combinazioni mai viste: assegna [0.5, 0.5]
-            col_sums = values.sum(axis=0)
-            zero_cols = (col_sums == 0)
+                combinazioni = pd.DataFrame(list(product([0, 1], repeat=len(figli))), columns=figli)
+                group_completo = pd.merge(combinazioni, group, how="left", on=figli).fillna(0)
+                group_sorted = group_completo.sort_values(by=figli).drop(columns=figli)
+                values = group_sorted.T.values
 
-            values[0, zero_cols] = 0.5
-            values[1, zero_cols] = 0.5
+                zero_cols = (values.sum(axis=0) == 0)
+                values[0, zero_cols] = 0.5
+                values[1, zero_cols] = 0.5
 
-            cpd = TabularCPD(
-                variable=sottocarico,
-                variable_card=2,
-                values=values,
-                evidence=figli,
-                evidence_card=[2 for _ in figli]
-            )
-            cpds_condizionate.append(cpd)
-            print(f"Anomaly table created    -> Conditional CPD created✅")
+                cpd = TabularCPD(
+                    variable=nodo,
+                    variable_card=2,
+                    values=values,
+                    evidence=figli,
+                    evidence_card=[2 for _ in figli]
+                )
 
-            # salvataggio cpd condizionate
-            evidence_names = cpd.get_evidence()
-            evidence_combinations = list(product([0, 1], repeat=len(evidence_names)))
+                model.add_cpds(cpd)
 
-            prob_values = cpd.get_values().T
+                # Salva la CPD in CSV
+                evidence_combinations = list(product([0, 1], repeat=len(figli)))
+                df_cpd = pd.DataFrame(evidence_combinations, columns=figli)
+                for i in range(cpd.variable_card):
+                    df_cpd[f"P({nodo}={i})"] = values[i]
 
-            df_cpd = pd.DataFrame(evidence_combinations, columns=evidence_names)
-            for i in range(cpd.variable_card):
-                df_cpd[f"P({cpd.variable}={i})"] = prob_values[:, i]
-
-            output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "CPDs")
-            os.makedirs(output_dir, exist_ok=True)
-            csv_path = os.path.join(output_dir, f"cpd_{sottocarico}.csv")
-            df_cpd.to_csv(csv_path, index=False)
-
-        model.add_cpds(*cpds_condizionate)
-        model.add_cpds(cpd_case_study)
+                output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "CPDs")
+                os.makedirs(output_dir, exist_ok=True)
+                csv_path = os.path.join(output_dir, f"cpd_{nodo}.csv")
+                df_cpd.to_csv(csv_path, index=False)
     return model
 
 def run_BN(case_study: str):
@@ -136,6 +111,9 @@ def run_BN(case_study: str):
     """
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
+
+    levels = get_nodes_by_level(config["Load Tree"])
+    nodi_interni = [n for lvl in levels[1:] for n in lvl]
 
     titolo = "Running Bayesian Network 🔄"
     print_boxed_title(titolo)
@@ -160,8 +138,7 @@ def run_BN(case_study: str):
                                   columns="foglia", values="anomaly_prob").reset_index()
 
     results = []
-    nodi_padri = find_parents_of_leaves(config["Load Tree"])
-    print(f"\nInference on {nodi_padri}...\n")
+    print(f"\nInference on {nodi_interni}...\n")
 
     for _, row in df_pivot.iterrows():
 
@@ -180,16 +157,16 @@ def run_BN(case_study: str):
                 )
                 virtual_evidence.append(factor)
 
-        result = inference.query(variables=nodi_padri, virtual_evidence=virtual_evidence)
+        result = inference.query(variables=nodi_interni, virtual_evidence=virtual_evidence)
 
         row_result = {
             "Date": row["Date"],
             "Context": row["Context"],
             "Cluster": row["Cluster"]
         }
-        for nodo in nodi_padri:
+        for nodo in nodi_interni:
             marginal = result.marginalize(
-                [n for n in nodi_padri if n != nodo],
+                [n for n in nodi_interni if n != nodo],
                 inplace=False
             )
             row_result[f"P({nodo}=1)"] = marginal.values[1]
@@ -199,30 +176,30 @@ def run_BN(case_study: str):
 
     df_result = pd.DataFrame(results)
 
+    anomaly_path = os.path.join(PROJECT_ROOT, "results", case_study, "anomaly_table", f"anomaly_table_{case_study}.csv")
+    if os.path.exists(anomaly_path):
+        df_anomaly = pd.read_csv(anomaly_path)
+        df_result = df_result.merge(
+            df_anomaly.assign(Anomaly=True)[["Date", "Context", "Cluster", "Anomaly"]],
+            on=["Date", "Context", "Cluster"],
+            how="left"
+        )
+        df_result["Anomaly"] = df_result["Anomaly"].fillna(False).astype(bool)
+
+    cols = list(df_result.columns)
+    for base_col in ["Date", "Context", "Cluster"]:
+        cols.remove(base_col)
+    cols.remove("Anomaly")
+    cabina_cols = [f"P({case_study}=1)", f"P({case_study}=0)"]
+    cols = [col for col in cols if col not in cabina_cols]
+    ordered_cols = ["Date", "Context", "Cluster", "Anomaly"] + cabina_cols + cols
+    df_result = df_result[ordered_cols]
+
     output_path = os.path.join(PROJECT_ROOT, "results", case_study, "inference_results.csv")
-    df_result.to_csv(output_path, index=False)
+    df_result.to_csv(output_path, index=False, float_format="%.5f")
     print(f"\033[92mCompleted analysis for '{case_study}' 🎉\033[0m\n")
 
     return df_result
 
-
 if __name__ == "__main__":
      df = run_BN("Cabina")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

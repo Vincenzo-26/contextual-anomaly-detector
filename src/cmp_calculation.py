@@ -34,10 +34,7 @@ def run_cmp(case_study: str, groups_tw_case_study: str = None):
             results = {}
 
         for key, subtree in tree.items():
-            is_leaf = isinstance(subtree, dict) and len(subtree) == 0
-
-            # Esegui CMP solo se è il primo nodo (level 0) o è un nodo foglia
-            if level == 0 or is_leaf:
+            if os.path.exists(os.path.join(PROJECT_ROOT, "data", case_study, f"{key}.csv")):
                 logger.info(f"Running CMP for {key}")
                 df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{key}.csv"), index_col=0,
                                  parse_dates=True)
