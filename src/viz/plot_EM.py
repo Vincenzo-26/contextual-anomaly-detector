@@ -37,7 +37,7 @@ def plot_EM(case_study: str, foglia: str, context: int, cluster: int):
 
     fig = go.Figure()
 
-    # === Istogrammi prima ===
+    # === Istogrammi ===
     fig.add_trace(go.Histogram(
         x=X_normal,
         nbinsx=30,
@@ -61,19 +61,14 @@ def plot_EM(case_study: str, foglia: str, context: int, cluster: int):
 
     # Fit GMM ai normal
     X_normal_reshape = X_normal.reshape(-1, 1)
-
     counts, _ = np.histogram(X_normal.flatten(), bins=30)
     peaks, _ = find_peaks(counts, height=0.05 * np.max(counts))
-    k_estimated = len(peaks)
-    k_estimated = min(max(1, k_estimated), 3)
+    k_estimated = min(max(1, len(peaks)), 3)
 
     gmm_normal = GaussianMixture(n_components=k_estimated, covariance_type='full', random_state=0)
     gmm_normal.fit(X_normal_reshape)
-
-    # Densità normal
     p_x_normal = np.exp(gmm_normal.score_samples(x_plot.reshape(-1, 1)))
 
-    # Curva normal
     fig.add_trace(go.Scatter(
         x=x_plot, y=p_x_normal,
         mode='lines',
@@ -84,12 +79,10 @@ def plot_EM(case_study: str, foglia: str, context: int, cluster: int):
         hovertemplate='Energy: %{x:.2f}<br>PDF: %{y:.5f}<extra></extra>'
     ))
 
-    # Fit GMM anomaly (se esistono abbastanza anomaly)
     if len(X_anomaly) >= 2:
         X_anomaly_reshape = X_anomaly.reshape(-1, 1)
         gmm_anomaly = GaussianMixture(n_components=1, covariance_type='full', random_state=0)
         gmm_anomaly.fit(X_anomaly_reshape)
-
         p_x_anomaly = np.exp(gmm_anomaly.score_samples(x_plot.reshape(-1, 1)))
 
         fig.add_trace(go.Scatter(
@@ -102,14 +95,23 @@ def plot_EM(case_study: str, foglia: str, context: int, cluster: int):
             hovertemplate='Energy: %{x:.2f}<br>PDF: %{y:.5f}<extra></extra>'
         ))
 
-        # Priori
         n_normal = len(X_normal)
         n_anomaly = len(X_anomaly)
         prior_normal = n_normal / (n_normal + n_anomaly)
         prior_anomaly = n_anomaly / (n_normal + n_anomaly)
 
-        # Probabilità di anomalia
         anomaly_prob = (p_x_anomaly * prior_anomaly) / (p_x_anomaly * prior_anomaly + p_x_normal * prior_normal + 1e-10)
+
+        # Saturazione continua asintotica per x > max_anomaly_energy
+        max_anomaly_energy = X_anomaly.max()
+        alpha = 1.5
+        idx_start = np.argmax(x_plot > max_anomaly_energy)
+        if idx_start < len(x_plot):
+            base_prob = anomaly_prob[idx_start - 1] if idx_start > 0 else anomaly_prob[idx_start]
+            for i in range(idx_start, len(x_plot)):
+                delta = x_plot[i] - max_anomaly_energy
+                anomaly_prob[i] = base_prob + (1 - base_prob) * (1 - np.exp(-alpha * delta))
+                anomaly_prob[i] = min(anomaly_prob[i], 1.0)
 
     else:
         print(f"Warning: insufficient anomaly data for context {context}, cluster {cluster}. Using sigmoid anomaly probability.")
@@ -119,7 +121,6 @@ def plot_EM(case_study: str, foglia: str, context: int, cluster: int):
         z = np.clip(z, -500, 500)
         anomaly_prob = 1 / (1 + np.exp(-z))
 
-    # Curva di probabilità di anomalia
     fig.add_trace(go.Scatter(
         x=x_plot, y=anomaly_prob,
         mode='lines',
@@ -128,7 +129,6 @@ def plot_EM(case_study: str, foglia: str, context: int, cluster: int):
         hovertemplate='Energy: %{x:.2f}<br>Anomaly Prob: %{y:.3f}<extra></extra>'
     ))
 
-    # Punti normal
     fig.add_trace(go.Scatter(
         x=X_normal, y=[max(p_x_normal.max(), 1) * 1.05] * len(X_normal),
         mode='markers',
@@ -137,7 +137,6 @@ def plot_EM(case_study: str, foglia: str, context: int, cluster: int):
         hovertemplate='Energy: %{x:.2f}<extra></extra>'
     ))
 
-    # Punti anomaly
     if len(X_anomaly) > 0:
         fig.add_trace(go.Scatter(
             x=X_anomaly, y=[max(p_x_normal.max(), 1) * 1.05] * len(X_anomaly),
@@ -169,4 +168,4 @@ def plot_EM(case_study: str, foglia: str, context: int, cluster: int):
 
 
 if __name__ == "__main__":
-    plot_EM(case_study="Cabina", foglia="QE UTA 3_3B_7", context=3, cluster=3)
+    plot_EM(case_study="Cabina", foglia="QE UTA 3_3B_7", context=1, cluster=3)

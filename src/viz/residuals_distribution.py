@@ -181,7 +181,7 @@ def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int
 if __name__ == "__main__":
     plot_residuals(
         case_study="Cabina",
-        sottocarico="Rooftop 5",
+        sottocarico="Rooftop 3",
         context=1,
         cluster=3,
         penalty=10

@@ -60,6 +60,24 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
         energy_data_full = run_energy_in_tw(case_study, foglia)
         anm_table = pd.read_csv(os.path.join(anomaly_path, f"anomaly_table_{foglia}.csv"))
 
+        print("\n--- DEBUG Date Types ---")
+        print("anomaly_table['Date'] type example:", type(anm_table['Date'].iloc[0]))
+        print("energy_data_full['Date'] type example:", type(energy_data_full['Date'].iloc[0]))
+
+        print("\n--- DEBUG Chiavi Anomalia ---")
+        print("Esempio chiave in anomaly_table:", anm_table[['Date', 'Context', 'Cluster']].iloc[0].to_list())
+        print("Esempio chiave in energy_data_full:", energy_data_full[['Date', 'Context', 'Cluster']].iloc[0].to_list())
+
+        print("\n--- DEBUG Matching chiavi con (2024-03-12, 1, 3) ---")
+        target_key = (pd.to_datetime("2024-03-12").date(), 1, 3)
+        print("target_key in anomaly_table keys:",
+              target_key in set(
+                  (pd.to_datetime(r.Date).date(), r.Context, r.Cluster) for r in anm_table.itertuples(index=False)))
+
+        print("target_key in energy_data_full:",
+              any((pd.to_datetime(r.Date).date(), r.Context, r.Cluster) == target_key for r in
+                  energy_data_full.itertuples(index=False)))
+
         anm_table["Date"] = pd.to_datetime(anm_table["Date"]).dt.date
         energy_data_full["Date"] = pd.to_datetime(energy_data_full["Date"]).dt.date
 
@@ -73,9 +91,9 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
 
         energy_data_full["anomaly_prob"] = np.nan
 
-        anm_keys = set((row.Date, row.Context, row.Cluster) for row in anm_table.itertuples(index=False))
+        anm_keys = set((str(row.Date), row.Context, row.Cluster) for row in anm_table.itertuples(index=False))
         energy_data_full["is_real_anomaly"] = energy_data_full.apply(
-            lambda row: (row.Date, row.Context, row.Cluster) in anm_keys, axis=1
+            lambda row: (str(row.Date), row.Context, row.Cluster) in anm_keys, axis=1
         )
 
         combinations = energy_data_full[["Context", "Cluster"]].drop_duplicates()
@@ -165,6 +183,14 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
             prior_anm = n_anm / (n_clean + n_anm)
 
             anomaly_prob = (p_anm * prior_anm) / (p_anm * prior_anm + p_clean * prior_clean + 1e-10)
+            max_anomaly_energy = X_anomaly.max()
+            alpha = 1.5
+            for i, x in enumerate(X_apply):
+                if x > max_anomaly_energy:
+                    delta = x - max_anomaly_energy
+                    base_prob = anomaly_prob[i - 1] if i > 0 else anomaly_prob[i]
+                    anomaly_prob[i] = base_prob + (1 - base_prob) * (1 - np.exp(-alpha * delta))
+                    anomaly_prob[i] = min(anomaly_prob[i], 1.0)
 
             energy_data_full.loc[mask, "anomaly_prob"] = anomaly_prob
 
