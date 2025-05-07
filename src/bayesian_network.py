@@ -40,7 +40,7 @@ def build_BN_structural_model(case_study: str):
 
         # Aggiunta CPD a priori uniformi per le foglie
         foglie = find_leaf_nodes(config["Load Tree"])
-        cpds_foglia = [TabularCPD(variable=f, variable_card=2, values=[[0.5], [0.5]]) for f in foglie]
+        cpds_foglia = [TabularCPD(variable=f, variable_card=2, values=[[0.9], [0.1]]) for f in foglie]
         model.add_cpds(*cpds_foglia)
 
 

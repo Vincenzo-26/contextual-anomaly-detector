@@ -1,6 +1,6 @@
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
-from utils import *
+from src.utils import *
 import json
 import numpy as np
 from sklearn.metrics import roc_auc_score
@@ -8,42 +8,54 @@ from scipy.signal import find_peaks
 from sklearn.mixture import GaussianMixture
 from tabulate import tabulate
 
+def sigmoid_iqr(X_ref, X_target, k):
+    q1 = np.percentile(X_ref, 25)
+    q3 = np.percentile(X_ref, 75)
+    iqr = q3 - q1
+    threshold = X_ref.max() + 1.5 * iqr  # sposta il centro della sigmoide
+    z = k * (X_target - threshold)
+    z = np.clip(z, -500, 500)
+    return 1 / (1 + np.exp(-z))
+def sigmoid_single_point(x_anom, X_target, k):
+    offset = np.log(1 / 0.95 - 1) / -k
+    threshold = x_anom - offset
+    z = k * (X_target - threshold)
+    z = np.clip(z, -500, 500)
+    return 1 / (1 + np.exp(-z)), threshold
+def extend_probability_tail(X_apply, anomaly_prob, max_x):
+    last_valid_idx = np.where(X_apply <= max_x)[0][-1]
+    if last_valid_idx >= 1:
+        dx = X_apply[last_valid_idx] - X_apply[last_valid_idx - 1]
+        dy = anomaly_prob[last_valid_idx] - anomaly_prob[last_valid_idx - 1]
+        slope = dy / dx if dx != 0 else 0.01
+    else:
+        slope = 0.01
 
-def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0.8):
+    base_prob = anomaly_prob[last_valid_idx]
+
+    for i in range(last_valid_idx + 1, len(X_apply)):
+        delta = X_apply[i] - max_x
+        anomaly_prob[i] = 1 - (1 - base_prob) * np.exp(-slope * delta / (1 - base_prob))
+        anomaly_prob[i] = min(anomaly_prob[i], 1.0)
+    return anomaly_prob
+
+def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold_metrics: float = 0.8, one_anm_peak=True):
     """
-     Calcola la probabilità di anomalia per ciascun dato,
-     utilizzando Gaussian Mixture Models (GMM) o una funzione sigmoide di fallback,
-     e valuta la qualità della classificazione con Precision, Recall e ROC AUC.
+    Calcola le probabilità di anomalia per ogni foglia dell'albero dei carichi
+    utilizzando modelli GMM o curve sigmoidi, e salva i risultati su file CSV.
 
-     Per ogni sottocarico:
-        - Separa i dati normal da quelli anomali.
-        - Per ogni combinazione di Context e Cluster:
-            - Se esistono dati normal:
-                - Stima la distribuzione dei dati normal tramite GMM (numero di distribuzioni stimato dai picchi di frequenza).
-                - Se esistono dati anomali validi:
-                    - Stima anche la distribuzione anomala tramite GMM.
-                    - Calcola la probabilità di anomalia via formula bayesiana.
-                - Se i dati anomali non sono disponibili o insufficienti:
-                    - Usa una funzione sigmoide basata sul massimo valore di energia normal.
-            - Se non esistono dati normal:
-                - Skippa la combinazione context-cluster.
-        - Salva il dataframe aggiornato con le anomaly_prob in `Evidences_EM`.
+    Args:
+        case_study (str): Nome del caso studio.
+        k_sigmoide (float): Coefficiente di pendenza per la sigmoide (default = 6 per pendenza a 45°).
+        threshold_metrics (float): Soglia per determinare se un punto è anomalo per le metriche (default = 0.8).
+        one_anm_peak (bool): Se True, usa una sola componente GMM per le anomalie, se False calcola in automatico
+        il numero di componenti GMM (default = True).
 
-     Al termine:
-     - Applica la soglia definita su `anomaly_prob` per predire anomalie.
-     - Calcola e stampa le metriche:
-         - Precision
-         - Recall
-         - ROC AUC
+    Returns:
+        None
+    """
 
-     Args:
-         case_study (str): Nome del caso studio da analizzare.
-         k_sigmoide (float, optional): Fattore di pendenza per la funzione sigmoide. Default 6.
-         threshold (float, optional): Soglia di probabilità per precisione e richiamo. Default 0.8.
-
-     """
-    titolo = "Energy evidences calculation 📈"
-    print_boxed_title(titolo)
+    print_boxed_title("Energy evidences calculation 📈")
 
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
@@ -52,6 +64,12 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
     evidence_path = os.path.join(PROJECT_ROOT, "results", case_study, "Evidences_EM")
     os.makedirs(evidence_path, exist_ok=True)
 
+    TP_total = 0
+    FP_total = 0
+    FN_total = 0
+
+    all_data = []
+
     foglie = find_leaf_nodes(config["Load Tree"])
 
     for foglia in foglie:
@@ -59,24 +77,6 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
 
         energy_data_full = run_energy_in_tw(case_study, foglia)
         anm_table = pd.read_csv(os.path.join(anomaly_path, f"anomaly_table_{foglia}.csv"))
-
-        print("\n--- DEBUG Date Types ---")
-        print("anomaly_table['Date'] type example:", type(anm_table['Date'].iloc[0]))
-        print("energy_data_full['Date'] type example:", type(energy_data_full['Date'].iloc[0]))
-
-        print("\n--- DEBUG Chiavi Anomalia ---")
-        print("Esempio chiave in anomaly_table:", anm_table[['Date', 'Context', 'Cluster']].iloc[0].to_list())
-        print("Esempio chiave in energy_data_full:", energy_data_full[['Date', 'Context', 'Cluster']].iloc[0].to_list())
-
-        print("\n--- DEBUG Matching chiavi con (2024-03-12, 1, 3) ---")
-        target_key = (pd.to_datetime("2024-03-12").date(), 1, 3)
-        print("target_key in anomaly_table keys:",
-              target_key in set(
-                  (pd.to_datetime(r.Date).date(), r.Context, r.Cluster) for r in anm_table.itertuples(index=False)))
-
-        print("target_key in energy_data_full:",
-              any((pd.to_datetime(r.Date).date(), r.Context, r.Cluster) == target_key for r in
-                  energy_data_full.itertuples(index=False)))
 
         anm_table["Date"] = pd.to_datetime(anm_table["Date"]).dt.date
         energy_data_full["Date"] = pd.to_datetime(energy_data_full["Date"]).dt.date
@@ -107,11 +107,11 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
             clean_subset = energy_data_clean[
                 (energy_data_clean["Context"] == context) &
                 (energy_data_clean["Cluster"] == cluster)
-                ]
+            ]
             anm_subset = energy_data_anm[
                 (energy_data_anm["Context"] == context) &
                 (energy_data_anm["Cluster"] == cluster)
-                ]
+            ]
 
             if clean_subset.empty:
                 print(f"No normal data for Context {context} Cluster {cluster}. Skipping.")
@@ -120,116 +120,98 @@ def run_soft_evd_EM(case_study: str, k_sigmoide: float = 6, threshold: float = 0
 
             mask = (energy_data_full["Context"] == context) & (energy_data_full["Cluster"] == cluster)
             X_apply = energy_data_full.loc[mask, "Energy"].values
-
             X_normal = clean_subset["Energy"].values.reshape(-1, 1)
 
-            # Stima il numero di picchi
             counts, _ = np.histogram(X_normal.flatten(), bins=30)
-            peaks, _ = find_peaks(counts, height=0.05 * np.max(counts))  # 5% soglia per ignorare rumore
+            peaks, _ = find_peaks(counts, height=0.05 * np.max(counts))
+            k_estimated = min(max(1, len(peaks)), 3)
 
-            k_estimated = len(peaks)
-            k_estimated = min(max(1, k_estimated), 3)  # almeno 1, massimo 3
-
-            # Fit GMM sui dati normal
             gmm_normal = GaussianMixture(n_components=k_estimated, covariance_type='full', random_state=0)
             gmm_normal.fit(X_normal)
+            p_x_normal = np.exp(gmm_normal.score_samples(X_apply.reshape(-1, 1)))
 
-            # Calcola p(x | normal)
-            p_clean = np.exp(gmm_normal.score_samples(X_apply.reshape(-1, 1)))
-
-            # Se non ho anomalie o sono NaN, uso la sigmoide
             if anm_subset.empty or anm_subset["Energy"].isna().all():
-                print(f"Ctx {context} Clst {cluster} no anomaly data    -> Using sigmoidal anomaly probability.")
-
-                max_normal = X_normal.max()
-                z = k_sigmoide * (X_apply - max_normal)
-                z = np.clip(z, -500, 500)
-                anomaly_prob = 1 / (1 + np.exp(-z))
-
+                print(f"Ctx {context} Clst {cluster} no anomaly data -> Using sigmoidal anomaly probability.")
+                anomaly_prob = sigmoid_iqr(X_normal, X_apply, k_sigmoide)
                 energy_data_full.loc[mask, "anomaly_prob"] = anomaly_prob
                 continue
 
             X_anomaly = anm_subset["Energy"].values.reshape(-1, 1)
 
-            if np.isnan(X_anomaly).any() or len(X_anomaly) < 2:
-                print(
-                    f"Ctx {context} Clst {cluster} dev.std invalid for anomaly data (only 1 record)    -> Using sigmoidal anomaly probability.")
-
-                max_normal = X_normal.max()
-                z = k_sigmoide * (X_apply - max_normal)
-                z = np.clip(z, -500, 500)
-                anomaly_prob = 1 / (1 + np.exp(-z))
-
-                energy_data_full.loc[mask, "anomaly_prob"] = anomaly_prob
-                continue
-
-            # Fit GMM anche sugli anomaly se possibile
             try:
-                gmm_anomaly = GaussianMixture(n_components=1, covariance_type='full', random_state=0)
+                if one_anm_peak:
+                    k_anm_estimated = 1
+                else:
+                    counts_anm, _ = np.histogram(X_anomaly.flatten(), bins=30)
+                    peaks_anm, _ = find_peaks(counts_anm, height=0.05 * np.max(counts_anm))
+                    k_anm_estimated = min(max(1, len(peaks_anm)), 3)
+
+                gmm_anomaly = GaussianMixture(n_components=k_anm_estimated, covariance_type='full', random_state=0)
                 gmm_anomaly.fit(X_anomaly)
-                p_anm = np.exp(gmm_anomaly.score_samples(X_apply.reshape(-1, 1)))
+                print(f"Ctx {context} Clst {cluster} -> GMM applied via EM with {k_anm_estimated} peak(s).")
+                p_x_anomaly = np.exp(gmm_anomaly.score_samples(X_apply.reshape(-1, 1)))
             except:
-                print(f"Failed fitting GMM anomaly model for context {context} cluster {cluster}. Using sigmoide.")
-                max_normal = X_normal.max()
-                z = k_sigmoide * (X_apply - max_normal)
-                z = np.clip(z, -500, 500)
-                anomaly_prob = 1 / (1 + np.exp(-z))
+                x_anom = X_anomaly.flatten()[0]
+                anomaly_prob, threshold = sigmoid_single_point(x_anom, X_apply, k_sigmoide)
                 energy_data_full.loc[mask, "anomaly_prob"] = anomaly_prob
+                print(f"Ctx {context} Clst {cluster} -> Only 1 anomaly point. Using sigmoid centered at {threshold:.2f} for P=0.95 at x={x_anom:.2f}.")
                 continue
 
-            n_clean = len(X_normal)
-            n_anm = len(X_anomaly)
-            prior_clean = n_clean / (n_clean + n_anm)
-            prior_anm = n_anm / (n_clean + n_anm)
+            n_normal = len(X_normal)
+            n_anomaly = len(X_anomaly)
+            prior_normal = n_normal / (n_normal + n_anomaly)
+            prior_anomaly = n_anomaly / (n_normal + n_anomaly)
 
-            anomaly_prob = (p_anm * prior_anm) / (p_anm * prior_anm + p_clean * prior_clean + 1e-10)
+            anomaly_prob = (p_x_anomaly * prior_anomaly) / (p_x_anomaly * prior_anomaly + p_x_normal * prior_normal + 1e-10)
+
+            # per impedire di avere falsi positivi quando la curva anm ha code molto lunghe
+            min_safe = np.percentile(X_normal, 1)
+            anomaly_prob[X_apply < min_safe] = 0
+
             max_anomaly_energy = X_anomaly.max()
-            alpha = 1.5
-            for i, x in enumerate(X_apply):
-                if x > max_anomaly_energy:
-                    delta = x - max_anomaly_energy
-                    base_prob = anomaly_prob[i - 1] if i > 0 else anomaly_prob[i]
-                    anomaly_prob[i] = base_prob + (1 - base_prob) * (1 - np.exp(-alpha * delta))
-                    anomaly_prob[i] = min(anomaly_prob[i], 1.0)
+            anomaly_prob = extend_probability_tail(X_apply, anomaly_prob, max_anomaly_energy)
 
             energy_data_full.loc[mask, "anomaly_prob"] = anomaly_prob
 
+        # Metrics for this foglia
+        predicted_anomalies = energy_data_full["anomaly_prob"] > threshold_metrics
+        true_anomalies = energy_data_full["is_real_anomaly"]
+
+        TP_total += ((predicted_anomalies == True) & (true_anomalies == True)).sum()
+        FP_total += ((predicted_anomalies == True) & (true_anomalies == False)).sum()
+        FN_total += ((predicted_anomalies == False) & (true_anomalies == True)).sum()
+
+        all_data.append(energy_data_full)
+
         output_file = os.path.join(evidence_path, f"evd_{foglia}.csv")
         energy_data_full.to_csv(output_file, index=False)
-
         print(f"\nSaved - Skipped {skipped_cases} Ctx-Clst combinations due to insufficient data.\n")
 
-    predicted_anomalies = energy_data_full["anomaly_prob"] > threshold
-    true_anomalies = energy_data_full["is_real_anomaly"]
+    # Unione finale
+    df_all = pd.concat(all_data, ignore_index=True)
 
-    TP = ((predicted_anomalies == True) & (true_anomalies == True)).sum()
-    FP = ((predicted_anomalies == True) & (true_anomalies == False)).sum()
-    FN = ((predicted_anomalies == False) & (true_anomalies == True)).sum()
+    TP = TP_total
+    FP = FP_total
+    FN = FN_total
 
-    if TP + FP > 0:
-        precision = TP / (TP + FP)
-    else:
-        precision = None
+    precision = TP / (TP + FP) if TP + FP > 0 else None
+    recall = TP / (TP + FN) if TP + FN > 0 else None
 
-    if TP + FN > 0:
-        recall = TP / (TP + FN)
-    else:
-        recall = None
-
-    # Calcolo ROC-AUC sempre, usando le probabilità continue
     try:
-        roc_auc = roc_auc_score(true_anomalies, energy_data_full["anomaly_prob"])
+        roc_auc = roc_auc_score(df_all["is_real_anomaly"], df_all["anomaly_prob"])
     except ValueError:
         roc_auc = None
 
+    # Output finale
     metrics = [
-        [f"Precisione (threshold={threshold})", f"{precision:.3f}" if precision is not None else "n.d."],
-        [f"Recall     (threshold={threshold})", f"{recall:.3f}" if recall is not None else "n.d."],
+        [f"Precisione (threshold={threshold_metrics})", f"{precision:.3f} ({TP}/{TP + FP})" if precision is not None else "n.d."],
+        [f"Recall     (threshold={threshold_metrics})", f"{recall:.3f} ({TP}/{TP + FN})" if recall is not None else "n.d."],
         ["ROC AUC", f"{roc_auc:.3f}" if roc_auc is not None else "n.d."]
     ]
-
     print(tabulate(metrics, headers=["Metriche 📊", ""], tablefmt="grid"))
     print("\n\n")
+
+
 
 if __name__ == "__main__":
     run_soft_evd_EM("Cabina")

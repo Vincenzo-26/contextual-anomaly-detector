@@ -6,7 +6,7 @@ from prepare_case_study_data import run_data
 from bayesian_network import run_BN
 from calc_energy_distr import run_soft_evd_EM
 from utils import *
-from change_point_detection import run_change_point
+from calc_thermal_sensitivity import run_change_point
 from calc_soft_evidence import combine_soft_evidence
 
 
@@ -24,7 +24,7 @@ run_data(case_study, sottocarichi)
 # estrazione groups e tw ad alto livello
 run_groups_and_tw(case_study)
 
-# CMP alto livello
+# CMP
 run_cmp(case_study)
 
 # Creazione energy evidences

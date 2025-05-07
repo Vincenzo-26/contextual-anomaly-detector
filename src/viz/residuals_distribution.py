@@ -179,10 +179,12 @@ def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int
 
 
 if __name__ == "__main__":
+    import plotly.io as pio
+    pio.renderers.default = "browser"
     plot_residuals(
         case_study="Cabina",
         sottocarico="Rooftop 3",
-        context=1,
-        cluster=3,
+        context=3,
+        cluster=4,
         penalty=10
     )

@@ -68,4 +68,4 @@ def plot_stacked_area(case_study: str):
 
 
 if __name__ == "__main__":
-    plot_stacked_area("AuleR")
+    plot_stacked_area("Cabina")
