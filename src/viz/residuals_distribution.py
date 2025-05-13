@@ -1,297 +1,265 @@
+from src.utils import *
+import os
+import pandas as pd
 import numpy as np
-import ruptures as rpt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.linear_model import LinearRegression
-from src.utils import PROJECT_ROOT, run_energy_temp
-from src.calc_thermal_sensitivity import check_thermal_sensitivity, identify_operational_modes
-from sklearn.preprocessing import StandardScaler
+from src.utils import PROJECT_ROOT
 from scipy.stats import norm
 
 
-def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int, penalty: int = 10, normalize: bool = True):
-    df_normals, df_anomalies = run_energy_temp(case_study, sottocarico, context, cluster)
-    if df_normals is None or df_normals.empty:
-        print("⚠️ Dati insufficienti.")
+def plot_residuals(case_study:str, sottocarico:str, context:int, cluster:int, save_plot:bool):
+    base_dir = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity")
+    path_segments = os.path.join(base_dir, "segments", f"segment_{sottocarico}.csv")
+    path_residuals = os.path.join(base_dir, "residuals", f"residuals_{sottocarico}.csv")
+
+    if not os.path.exists(path_segments) or not os.path.exists(path_residuals):
+        print("❌ File non trovati.")
         return
 
-    df_sorted = df_normals.sort_values("Temperature").dropna(subset=["Temperature", "Energy"])
-    df_sorted = df_sorted[df_sorted["Energy"] > 0]
-    df_sorted = identify_operational_modes(df_sorted)
-    mode_list = sorted(df_sorted["Mode"].unique())
+    df_segments = pd.read_csv(path_segments)
+    df_residuals = pd.read_csv(path_residuals)
 
-    if len(mode_list) == 1:
-        # === CASO CON UNA SOLA MODALITÀ ===
-        signal = df_sorted[["Temperature", "Energy"]].values
-        scaler = StandardScaler()
-        signal_scaled = scaler.fit_transform(signal)
-        algo = rpt.Pelt(model="rbf").fit(signal_scaled)
-        change_points = algo.predict(pen=penalty)
+    # Filtra per combinazione specifica
+    df_segments = df_segments[(df_segments["Context"] == context) & (df_segments["Cluster"] == cluster)]
+    df_residuals = df_residuals[(df_residuals["Context"] == context) & (df_residuals["Cluster"] == cluster)]
 
-        residuals_by_segment = []
-        segment_labels = []
-        thermal_sensitive_indices = []
-
-        start = 0
-        for i, end in enumerate(change_points):
-            segment = df_sorted.iloc[start:end]
-            if len(segment) < 2:
-                start = end
-                continue
-
-            X = segment["Temperature"].values.reshape(-1, 1)
-            y = segment["Energy"].values
-            model = LinearRegression().fit(X, y)
-            y_pred = model.predict(X)
-
-            metrics = check_thermal_sensitivity(segment, normalize=normalize)
-            is_sensitive = metrics["is_thermal_sensitive"]
-
-            if is_sensitive:
-                residuals = y - y_pred
-                residuals_by_segment.append((residuals, i))
-                segment_labels.append(f"Segmento {i + 1}")
-                thermal_sensitive_indices.append((start, end, model))
-
-            start = end
-
-        n_sens = len(residuals_by_segment)
-        fig = make_subplots(
-            rows=1, cols=1 + n_sens,
-            column_widths=[0.5] + [0.5 / n_sens] * n_sens if n_sens > 0 else [1],
-            subplot_titles=["Firma Energetica"] + [f"Residui {label}" for label in segment_labels]
-        )
-
-        # Reset start
-        start = 0
-        for i, end in enumerate(change_points):
-            segment = df_sorted.iloc[start:end]
-            if len(segment) < 2:
-                start = end
-                continue
-
-            X = segment["Temperature"].values.reshape(-1, 1)
-            y = segment["Energy"].values
-            model = LinearRegression().fit(X, y)
-            y_pred = model.predict(X)
-
-            metrics = check_thermal_sensitivity(segment, normalize=normalize)
-            is_sensitive = metrics["is_thermal_sensitive"]
-
-            x0 = segment["Temperature"].iloc[0]
-            x1 = segment["Temperature"].iloc[-1]
-            fillcolor = "rgba(0,200,0,1)" if is_sensitive else "rgba(200,0,0,1)"
-
-            fig.add_shape(
-                type="rect", x0=x0, x1=x1, y0=0, y1=1,
-                xref="x1", yref="paper",
-                fillcolor=fillcolor,
-                opacity=0.2,
-                line=dict(width=0),
-                layer="below"
-            )
-
-            fig.add_trace(go.Scatter(
-                x=X.flatten(), y=y_pred,
-                mode="lines", name=f"Segmento {i+1}"
-            ), row=1, col=1)
-
-            start = end
-
-        fig.add_trace(go.Scatter(
-            x=df_sorted["Temperature"], y=df_sorted["Energy"],
-            mode='markers', name="Dati reali", marker=dict(color='skyblue'),
-        ), row=1, col=1)
-
-        if df_anomalies is not None and not df_anomalies.empty:
-            df_anomalies_sorted = df_anomalies.sort_values(by="Temperature").dropna(subset=["Temperature", "Energy"])
-            fig.add_trace(go.Scatter(
-                x=df_anomalies_sorted["Temperature"],
-                y=df_anomalies_sorted["Energy"],
-                mode='markers',
-                name="Anomalie (CMP)",
-                marker=dict(color='red', size=6),
-            ), row=1, col=1)
-
-        for idx, (residuals, seg_index) in enumerate(residuals_by_segment):
-            hist, edges = np.histogram(residuals, bins=30)
-            bin_width = edges[1] - edges[0]
-            mu, sigma = np.mean(residuals), np.std(residuals)
-            x_norm = np.linspace(min(residuals), max(residuals), 100)
-            y_norm = norm.pdf(x_norm, mu, sigma) * len(residuals) * bin_width
-
-            fig.add_trace(go.Bar(
-                x=edges[:-1], y=hist, opacity=0.6,
-                name=f"Residui Segmento {seg_index + 1}",
-                marker_color='steelblue'
-            ), row=1, col=2 + idx)
-
-            fig.add_trace(go.Scatter(
-                x=x_norm, y=y_norm,
-                mode='lines', line=dict(dash='dot', color='black'),
-                showlegend=False
-            ), row=1, col=2 + idx)
-
-        fig.update_layout(title=f"{sottocarico} | Context {context} | Cluster {cluster}",
-                          template="plotly_white", title_x=0.5)
-
-        fig.show()
+    if df_segments.empty or df_residuals.empty:
+        print("⚠️ Nessun dato per la combinazione specificata.")
         return
 
-    # === CASO CON PIÙ MODALITÀ ===
+    modes = sorted(df_segments["Mode"].unique())
+    has_multiple_modes = len(modes) > 1
 
-    # conta quanti segmenti sensibili ha ogni modalità
-    residuals_by_mode = {mode: [] for mode in mode_list}
-    plots_per_mode = []
+    # Conta quanti segmenti sensibili ci sono per ogni modalità (max per le colonne)
+    max_ts_segments = df_segments[df_segments["Thermal Sensitive"] == True].groupby("Mode")["Segmento"].nunique().max()
+    max_ts_segments = max_ts_segments if pd.notna(max_ts_segments) else 0
 
-    for mode in mode_list:
-        df_mode = df_sorted[df_sorted["Mode"] == mode]
-        signal = df_mode[["Temperature", "Energy"]].values
-        scaler = StandardScaler()
-        signal_scaled = scaler.fit_transform(signal)
-        algo = rpt.Pelt(model="rank").fit(signal_scaled)
-        change_points = algo.predict(pen=penalty)
+    n_rows = len(modes) + (1 if has_multiple_modes else 0)
+    n_cols = 1 + max_ts_segments
 
-        start = 0
-        for i, end in enumerate(change_points):
-            segment = df_mode.iloc[start:end]
-            if len(segment) < 2:
-                start = end
-                continue
+    # Titoli subplot
+    subplot_titles = []
+    if has_multiple_modes:
+        subplot_titles += ["Firma Generale"] + [""] * (n_cols - 1)
+    for mode in modes:
+        subplot_titles.append(f"Mode {mode} – Firma Energetica")
+        ts_segments = df_segments[(df_segments["Mode"] == mode) & (df_segments["Thermal Sensitive"] == True)]["Segmento"].unique()
+        for seg_id in ts_segments:
+            subplot_titles.append(f"Residui – Segmento {seg_id}")
+        subplot_titles += [""] * (n_cols - 1 - len(ts_segments))
 
-            X = segment["Temperature"].values.reshape(-1, 1)
-            y = segment["Energy"].values
-            model = LinearRegression().fit(X, y)
-            y_pred = model.predict(X)
-
-            metrics = check_thermal_sensitivity(segment, normalize=normalize)
-            if metrics["is_thermal_sensitive"]:
-                residuals = y - y_pred
-                residuals_by_mode[mode].append((residuals, segment))
-
-            start = end
-
-        plots_per_mode.append(1 + len(residuals_by_mode[mode]))
-
-    total_rows = 2 + len(mode_list)  # 1° tutti i dati, poi una riga per ciascuna modalità
-    max_cols = max(plots_per_mode)
+    if n_cols == 1:
+        column_widths = [1.0]
+    else:
+        column_widths = [0.5] + [0.5 / (n_cols - 1)] * (n_cols - 1)
 
     fig = make_subplots(
-        rows=total_rows,
-        cols=max_cols,
-        row_heights=[0.4] + [0.3] * (total_rows - 1),  # 40% alla prima riga, 30% ciascuna alle altre
-        subplot_titles=["Tutti i dati"] +
-                       [f"Modalità {mode}" for mode in mode_list] +
-                       [f"Residui {i + 1}" for mode in mode_list for i in range(len(residuals_by_mode[mode]))],
-        horizontal_spacing=0.08,
-        vertical_spacing=0.15
+        rows=n_rows,
+        cols=n_cols,
+        shared_xaxes=False,
+        horizontal_spacing=0.05,
+        vertical_spacing=0.12,
+        subplot_titles=subplot_titles,
+        column_widths=column_widths
     )
+    current_row = 1
 
-    # RIGA 1 - TUTTI I DATI
-    fig.add_trace(go.Scatter(
-        x=df_sorted["Temperature"], y=df_sorted["Energy"],
-        mode="markers", name="Tutti i dati", marker=dict(color="skyblue")
-    ), row=1, col=1)
+    if has_multiple_modes:
+        colors = ["IndianRed", "LightSeaGreen", "purple", "cyan", "magenta"]
 
-    if df_anomalies is not None and not df_anomalies.empty:
-        fig.add_trace(go.Scatter(
-            x=df_anomalies["Temperature"], y=df_anomalies["Energy"],
-            mode="markers", name="Anomalie", marker=dict(color="red", size=6)
-        ), row=1, col=1)
+        for i, mode in enumerate(modes):
+            df_mode = df_residuals[df_residuals["Mode"] == mode]
+            df_normal = df_mode[df_mode["is_real_anomaly"] == False]
+            df_anomalous = df_mode[df_mode["is_real_anomaly"] == True]
 
-    # RIGHE 2+ - MODALITÀ + RESIDUI
-    for mode_idx, mode in enumerate(mode_list):
-        row_mode = 2 + mode_idx
-        df_mode = df_sorted[df_sorted["Mode"] == mode]
-        signal = df_mode[["Temperature", "Energy"]].values
-        scaler = StandardScaler()
-        signal_scaled = scaler.fit_transform(signal)
-        algo = rpt.Pelt(model="rank").fit(signal_scaled)
-        change_points = algo.predict(pen=penalty)
-
-        start = 0
-        for i, end in enumerate(change_points):
-            segment = df_mode.iloc[start:end]
-            if len(segment) < 2:
-                start = end
-                continue
-
-            X = segment["Temperature"].values.reshape(-1, 1)
-            y = segment["Energy"].values
-            model = LinearRegression().fit(X, y)
-            x0 = segment["Temperature"].iloc[0]
-            x1 = segment["Temperature"].iloc[-1]
-            if i == 0:
-                x0 = df_mode["Temperature"].min()
-            if i == len(change_points) - 2:
-                x1 = df_mode["Temperature"].max()
-
-            y_pred_range = model.predict(np.linspace(x0, x1, 100).reshape(-1, 1))
-
-            metrics = check_thermal_sensitivity(segment, normalize=normalize)
-            fillcolor = "rgba(0,200,0,0.2)" if metrics["is_thermal_sensitive"] else "rgba(200,0,0,0.2)"
-
-            yaxis_idx = 1 + mode_idx * max_cols  # calcola indice subplot corrente
-            yref = f"y{yaxis_idx}"
-            xaxis = f"x{yaxis_idx}"
-            ymin = df_mode["Energy"].min()
-            ymax = df_mode["Energy"].max()
-
-            fig.add_shape(
-                type="rect", x0=x0, x1=x1, y0=ymin, y1=ymax,
-                xref=xaxis, yref=yref,
-                fillcolor=fillcolor, line=dict(width=0), layer="below"
+            # Normali (cerchi)
+            fig.add_trace(
+                go.Scatter(
+                    x=df_normal["Temperature"],
+                    y=df_normal["Energy"],
+                    mode="markers",
+                    marker=dict(color=colors[i % len(colors)], size=4),
+                    name=f"Mode {mode} - Normal",
+                    showlegend=True
+                ),
+                row=current_row,
+                col=1
             )
 
-            fig.add_trace(go.Scatter(
-                x=np.linspace(x0, x1, 100), y=y_pred_range,
-                mode="lines", name=f"Mod {mode} – segmento {i+1}"
-            ), row=row_mode, col=1)
+            # Anomali (X)
+            fig.add_trace(
+                go.Scatter(
+                    x=df_anomalous["Temperature"],
+                    y=df_anomalous["Energy"],
+                    mode="markers",
+                    marker=dict(color=colors[i % len(colors)], size=6, symbol='x'),
+                    name=f"Mode {mode} - Anomalous",
+                    showlegend=True
+                ),
+                row=current_row,
+                col=1
+            )
+        current_row += 1
 
-            start = end
+    for mode in modes:
+        df_mode = df_residuals[df_residuals["Mode"] == mode]
+        df_mode_seg = df_segments[df_segments["Mode"] == mode]
 
-        # Punti reali
-        fig.add_trace(go.Scatter(
-            x=df_mode["Temperature"], y=df_mode["Energy"],
-            mode="markers", name=f"Dati Mod {mode}",
-            marker=dict(color="skyblue")
-        ), row=row_mode, col=1)
-
-        for idx, (residuals, _) in enumerate(residuals_by_mode[mode]):
-            hist, edges = np.histogram(residuals, bins=30)
-            bin_width = edges[1] - edges[0]
-            mu, sigma = np.mean(residuals), np.std(residuals)
-            x_norm = np.linspace(min(residuals), max(residuals), 100)
-            y_norm = norm.pdf(x_norm, mu, sigma) * len(residuals) * bin_width
-
-            fig.add_trace(go.Bar(
-                x=edges[:-1], y=hist, opacity=0.6,
-                marker_color='steelblue',
-                name=f"Residui M{mode}-{idx+1}"
-            ), row=row_mode, col=2 + idx)
-
-            fig.add_trace(go.Scatter(
-                x=x_norm, y=y_norm,
-                mode='lines', line=dict(dash='dot', color='black'),
+        df_normal = df_mode[df_mode["is_real_anomaly"] == False]
+        fig.add_trace(
+            go.Scatter(
+                x=df_normal["Temperature"],
+                y=df_normal["Energy"],
+                mode="markers",
+                marker=dict(color="blue", size=4),
+                name=f"Mode {mode} - Normal",
                 showlegend=False
-            ), row=row_mode, col=2 + idx)
+            ),
+            row=current_row,
+            col=1
+        )
+
+        df_anomalous = df_mode[df_mode["is_real_anomaly"] == True]
+        fig.add_trace(
+            go.Scatter(
+                x=df_anomalous["Temperature"],
+                y=df_anomalous["Energy"],
+                mode="markers",
+                marker=dict(color="red", size=4),
+                name=f"Mode {mode} - Anomalous",
+                showlegend=False
+            ),
+            row=current_row,
+            col=1
+        )
+
+        segments = df_mode_seg["Segmento"].unique()
+        ts_col_idx = 2  # da colonna 2 in poi per i residui
+        for seg_id in segments:
+            seg_info = df_mode_seg[df_mode_seg["Segmento"] == seg_id].iloc[0]
+            tmin, tmax = seg_info["t_min"], seg_info["t_max"]
+            is_sensitive = seg_info["Thermal Sensitive"]
+
+            # Tutti i punti del segmento (per stabilire l'intervallo)
+            df_seg_all = df_mode[(df_mode["assigned_segment"] == seg_id) |
+                                 ((df_mode["Temperature"] >= tmin) & (df_mode["Temperature"] <= tmax))]
+
+            # Solo punti normali per il fit
+            df_seg_fit = df_seg_all[df_seg_all["is_real_anomaly"] == False]
+
+            if df_seg_fit.empty:
+                continue
+
+            fill_color = "rgba(0,200,0,0.1)" if is_sensitive else "rgba(200,0,0,0.1)"
+
+            fig.add_vrect(
+                x0=tmin,
+                x1=tmax,
+                fillcolor=fill_color,
+                layer="below",
+                line_width=0,
+                row=current_row,
+                col=1
+            )
+
+            X = df_seg_fit["Temperature"].values.reshape(-1, 1)
+            y = df_seg_fit["Energy"].values
+            model = LinearRegression().fit(X, y)
+
+            x_line = np.linspace(df_seg_all["Temperature"].min(), df_seg_all["Temperature"].max(), 100)
+            y_line = model.predict(x_line.reshape(-1, 1))
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_line,
+                    y=y_line,
+                    mode="lines",
+                    line=dict(
+                        color="black",
+                        width=1,
+                        dash="solid"
+                    ),
+                    showlegend=False
+                ),
+                row=current_row,
+                col=1
+            )
+
+            if is_sensitive:
+                df_seg_points_resid = df_seg_fit.dropna(subset=["residual"])
+                if not df_seg_points_resid.empty:
+                    residuals = df_seg_points_resid["residual"].values
+                    mean_r = residuals.mean()
+                    std_r = residuals.std()
+
+                    fig.add_trace(
+                        go.Histogram(
+                            x=residuals,
+                            nbinsx=30,
+                            marker_color="green",
+                            opacity=0.6,
+                            showlegend=False
+                        ),
+                        row=current_row,
+                        col=ts_col_idx
+                    )
+
+                    x_vals = np.linspace(residuals.min(), residuals.max(), 200)
+                    y_vals = norm.pdf(x_vals, mean_r, std_r)
+                    y_scaled = y_vals * len(residuals) * (residuals.max() - residuals.min()) / 30
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_vals,
+                            y=y_scaled,
+                            mode="lines",
+                            line=dict(color="black"),
+                            showlegend=False
+                        ),
+                        row=current_row,
+                        col=ts_col_idx
+                    )
+                    ts_col_idx += 1
+
+        current_row += 1
 
     fig.update_layout(
-        title=f"{sottocarico} | Context {context} | Cluster {cluster}",
-        template="plotly_white",
-        title_x=0.5,
-        height=300 + 350 * total_rows,  # aumenta proporzionalmente
-        showlegend=True
+        height=600 * n_rows,
+        title_text=f"{sottocarico} | Context {context} – Cluster {cluster}",
+        template="plotly_white"
     )
-    fig.show()
+
+    if save_plot:
+        output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "plot_thermal_sens")
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"{foglia}_ctx{context}_cls{cluster}.html")
+        fig.write_html(output_file, include_plotlyjs="cdn")
+        print(f"Saved {foglia}_ctx{context}_cls{cluster}.html")
+    else:
+        fig.show()
 
 
 
 if __name__ == "__main__":
-    plot_residuals(
-        case_study="Cabina",
-        sottocarico="Rooftop 3",
-        context=3,
-        cluster=4,
-        penalty=100
-    )
+    case_study = "Cabina"
+    save_plot = True
+
+    if save_plot:
+        with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
+            config = json.load(f)
+        foglie = find_leaf_nodes(config["Load Tree"])
+        for foglia in foglie:
+            for cls in range(1, 6):
+                for ctx in range(1, 6):
+                    plot_residuals(case_study, foglia, ctx, cls, save_plot)
+
+    else:
+        plot_residuals(
+            case_study="Cabina",
+            sottocarico="Rooftop 3",
+            context=3,
+            cluster=3,
+            save_plot=save_plot
+        )

@@ -5,18 +5,34 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error
 from scipy.stats import spearmanr
 import ruptures as rpt
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler
 from src.utils import *
 from sklearn.mixture import GaussianMixture
 import warnings
 from scipy.stats import ConstantInputWarning
 
-def check_thermal_sensitivity(df_segment, normalize:bool, corr_thresh=0.5, r2_thresh=0.5, slope_thresh=0.2):
+def scale_data(X, method="zscore"):
+    method = method.lower()
+    if method == "zscore":
+        return StandardScaler().fit_transform(X)
+    elif method == "minmax":
+        return MinMaxScaler().fit_transform(X)
+    elif method == "robust":
+        return RobustScaler().fit_transform(X)
+    elif method == "maxabs":
+        return MaxAbsScaler().fit_transform(X)
+    elif method == "none":
+        return X
+    else:
+        raise ValueError(f"Metodo di normalizzazione non supportato: '{method}'")
+
+def check_thermal_sensitivity(df_segment, normalize="Zscore", corr_thresh=0.5, r2_thresh=0.5, slope_thresh=0.2):
     """
     Verifica se un segmento è termicamente sensibile usando correlazione, pendenza e R².
 
     Args:
         df_segment (pd.DataFrame): Segmento con colonne 'Temperature' e 'Energy'.
+        normalize (str or bool): Metodo di normalizzazione ('Zscore', 'minmax', 'robust', 'maxabs', 'none' o False).
         corr_thresh (float): Soglia di correlazione.
         r2_thresh (float): Soglia R².
         slope_thresh (float): Soglia della pendenza.
@@ -25,31 +41,28 @@ def check_thermal_sensitivity(df_segment, normalize:bool, corr_thresh=0.5, r2_th
         dict: Metriche calcolate e flag 'is_thermal_sensitive'.
     """
     X_raw = df_segment[["Temperature"]]
-    y_raw = df_segment["Energy"].values
+    y_raw = df_segment["Energy"].values.reshape(-1, 1)
 
     if len(X_raw) < 2:
         return {"correlation": np.nan, "slope": np.nan, "r2_score": np.nan, "is_thermal_sensitive": False}
 
-    # Calcola la correlazione di Spearman (invariante alla scala)
+    # Correlazione di Spearman
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", ConstantInputWarning)
         try:
-            corr, _ = spearmanr(X_raw.values.flatten(), y_raw)
+            corr, _ = spearmanr(X_raw.values.flatten(), y_raw.flatten())
         except Exception:
             print("⚠️ Segmento con input costante: impossibile calcolare la correlazione.")
             corr = np.nan
 
-    # Normalizzazione opzionale
-    if normalize:
-        scaler_X = StandardScaler()
-        scaler_y = StandardScaler()
-        X = scaler_X.fit_transform(X_raw)
-        y = scaler_y.fit_transform(y_raw.reshape(-1, 1)).flatten()
-    else:
-        X = X_raw
-        y = y_raw
+    # Determina tipo di normalizzazione
+    method = str(normalize).lower() if normalize not in [False, None] else "none"
 
-    # Modello lineare
+    # Applica normalizzazione a X e y
+    X = scale_data(X_raw, method)
+    y = scale_data(y_raw, method).flatten()
+
+    # Regressione
     model = LinearRegression().fit(X, y)
     slope = model.coef_[0]
     r2 = r2_score(y, model.predict(X))
@@ -61,12 +74,13 @@ def check_thermal_sensitivity(df_segment, normalize:bool, corr_thresh=0.5, r2_th
         "slope": round(slope, 3),
         "r2_score": round(r2, 3),
         "is_thermal_sensitive": is_sensitive,
+        "scaling_used": method,
         "corr_thresh": corr_thresh,
         "slope_thresh": slope_thresh,
         "r2_thresh": r2_thresh
     }
 
-def identify_operational_modes(df: pd.DataFrame, n_components=2, bic_threshold=100):
+def identify_operational_modes(df: pd.DataFrame, n_components=2, bic_threshold=10):
     """
     Applica GMM per rilevare massimo 2 modalità operative e restituisce un dataframe con una colonna "Mode".
     Se la separazione non è giustificata dal BIC, assegna a tutti la stessa modalità (0).
@@ -93,7 +107,9 @@ def identify_operational_modes(df: pd.DataFrame, n_components=2, bic_threshold=1
         df["Mode"] = 0
         return df, gmm1, scaler
 
-def run_change_point(case_study: str, penalty: int, normalize:bool=True):
+
+
+def run_change_point(case_study: str, penalty: int, norm_for_check_term_sens: any = (True, "zscore"), scaling_method_for_change_point: str = "zscore"):
     """
     Esegue l'analisi di segmentazione per ogni foglia del caso studio. Per ciascun segmento rilevato tramite
     change point detection, verifica se è termicamente sensibile e, se sì, calcola i residui e la probabilità
@@ -109,9 +125,23 @@ def run_change_point(case_study: str, penalty: int, normalize:bool=True):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
+
     foglie = find_leaf_nodes(config["Load Tree"])
     print_boxed_title(f"Thermal sensitivity analysis for '{case_study}'🌡️")
-    any_anomalies = False
+
+    print(f"Normalization method for change point detection: {scaling_method_for_change_point}")
+
+    if norm_for_check_term_sens is False:
+        thermal_scaling = "none"
+        print(f"Data not normalized for checking thermal sensitivity")
+    elif norm_for_check_term_sens is True:
+        thermal_scaling = "Zscore"
+        print(f"Normalized data for checking thermal sensitivity    -> Method: {thermal_scaling} (default)\n")
+    elif isinstance(norm_for_check_term_sens, (tuple, list)) and norm_for_check_term_sens[0] is True:
+        thermal_scaling = norm_for_check_term_sens[1]
+        print(f"Normalized data for checking thermal sensitivity    -> Method: {thermal_scaling}\n")
+    else:
+        raise ValueError(f"Parametro non valido per norm_for_check_term_sens: {norm_for_check_term_sens}")
 
     for foglia in foglie:
         print(f"\033[91m{foglia}\033[0m")
@@ -145,7 +175,7 @@ def run_change_point(case_study: str, penalty: int, normalize:bool=True):
                         continue
 
                     signal = df_mode[["Temperature", "Energy"]].values
-                    signal_scaled = StandardScaler().fit_transform(signal)
+                    signal_scaled = scale_data(signal, method=scaling_method_for_change_point)
                     algo = rpt.Pelt(model="rank").fit(signal_scaled)
                     change_points = algo.predict(pen=penalty)
 
@@ -155,7 +185,7 @@ def run_change_point(case_study: str, penalty: int, normalize:bool=True):
                         segment = df_mode.iloc[start:end]
                         t_min = segment["Temperature"].min()
                         t_max = segment["Temperature"].max()
-                        metrics = check_thermal_sensitivity(segment, normalize)
+                        metrics = check_thermal_sensitivity(segment, normalize=thermal_scaling)
 
                         segment_results.append({
                             "Context": context, "Cluster": cluster, "Mode": mode,
@@ -284,4 +314,4 @@ def run_change_point(case_study: str, penalty: int, normalize:bool=True):
 
 
 if __name__ == "__main__":
-    run_change_point(case_study="Cabina", penalty=10)
+    run_change_point(case_study="Cabina", penalty=100)
