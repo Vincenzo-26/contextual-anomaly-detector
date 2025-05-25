@@ -2,7 +2,14 @@ import os
 from utils import *
 import json
 
-def combine_soft_evidence(case_study: str, alpha: float = 0.7):
+def tempered_soft_or(row, gamma=5):
+    pe = row["energy_anomaly_prob"]
+    pt = row["temp_anomaly_prob"]
+    if not row["thermal_sensitive"]:
+        return pe
+    combined = 1 - (1 - pe) * (1 - pt)
+    return combined ** gamma
+def combine_soft_evidence(case_study: str, gamma: int = 5):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
@@ -33,17 +40,14 @@ def combine_soft_evidence(case_study: str, alpha: float = 0.7):
         df_energy = df_energy.rename(columns={"anomaly_prob": "energy_anomaly_prob"})
 
         df_temp = pd.read_csv(temp_path)
-        df_temp = df_temp[["Date", "Context", "Cluster", "Temperature", "Anomaly_Prob"]]
-        df_temp = df_temp.rename(columns={"Anomaly_Prob": "temp_anomaly_prob"})
+        df_temp = df_temp[["Date", "Context", "Cluster", "Temperature", "prob_anomaly"]]
+        df_temp = df_temp.rename(columns={"prob_anomaly": "temp_anomaly_prob"})
 
         df_merged = df_energy.merge(df_temp, on=["Date", "Context", "Cluster"], how="left")
         df_merged["thermal_sensitive"] = df_merged["temp_anomaly_prob"].notna()
 
-        df_merged["anomaly_prob"] = df_merged.apply(
-            lambda row: row["energy_anomaly_prob"] * (1 - alpha * row["temp_anomaly_prob"])
-            if row["thermal_sensitive"] else row["energy_anomaly_prob"],
-            axis=1
-        )
+        df_merged["anomaly_prob"] = df_merged.apply(lambda row: tempered_soft_or(row, gamma=gamma), axis=1)
+
         ordered_cols = ["Date", "Context", "Cluster", "Energy", "Temperature", "energy_anomaly_prob", "temp_anomaly_prob",
                          "anomaly_prob", "is_real_anomaly", "thermal_sensitive"]
         df_merged = df_merged[[col for col in ordered_cols if col in df_merged.columns]]
@@ -54,7 +58,7 @@ def combine_soft_evidence(case_study: str, alpha: float = 0.7):
     print("\nAnomaly probabilities calculated ✅     -> ready for bayesian inference\n\n")
 
 if __name__ == "__main__":
-    combine_soft_evidence("Cabina")
+    combine_soft_evidence("Cabina", 5)
 
 
 

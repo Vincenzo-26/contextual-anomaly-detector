@@ -26,6 +26,7 @@ def scale_data(X, method="zscore"):
     else:
         raise ValueError(f"Metodo di normalizzazione non supportato: '{method}'")
 
+
 def check_thermal_sensitivity(df_segment, normalize="Zscore", corr_thresh=0.5, r2_thresh=0.5, slope_thresh=0.2):
     """
     Verifica se un segmento è termicamente sensibile usando correlazione, pendenza e R².
@@ -44,7 +45,16 @@ def check_thermal_sensitivity(df_segment, normalize="Zscore", corr_thresh=0.5, r
     y_raw = df_segment["Energy"].values.reshape(-1, 1)
 
     if len(X_raw) < 2:
-        return {"correlation": np.nan, "slope": np.nan, "r2_score": np.nan, "is_thermal_sensitive": False}
+        return {
+            "correlation": np.nan,
+            "slope": np.nan,
+            "r2_score": np.nan,
+            "is_thermal_sensitive": False,
+            "scaling_used": normalize,
+            "corr_thresh": corr_thresh,
+            "slope_thresh": slope_thresh,
+            "r2_thresh": r2_thresh
+        }
 
     # Correlazione di Spearman
     with warnings.catch_warnings():
@@ -80,36 +90,75 @@ def check_thermal_sensitivity(df_segment, normalize="Zscore", corr_thresh=0.5, r
         "r2_thresh": r2_thresh
     }
 
-def identify_operational_modes(df: pd.DataFrame, n_components=2, bic_threshold=10):
+
+def operational_modes_detection(df: pd.DataFrame, bic_threshold: float):
     """
-    Applica GMM per rilevare massimo 2 modalità operative e restituisce un dataframe con una colonna "Mode".
-    Se la separazione non è giustificata dal BIC, assegna a tutti la stessa modalità (0).
+    Identifica le modalità operative di un sistema basandosi sui dati di Temperatura ed Energia,
+    utilizzando Gaussian Mixture Models (GMM) con fino a 3 componenti.
+
+    La funzione seleziona il miglior numero di componenti GMM sulla base del miglioramento relativo del BIC,
+    **a condizione che tutti i cluster individuati abbiano almeno 5 punti** per non rompere il processo di
+    change point detection successivo. Se un GMM produce anche solo un cluster
+    con meno di 5 punti, viene scartato, indipendentemente dal miglioramento del BIC, in favore del modello con
+    numero di componenti inferiore.
+
+    Args:
+        df (pd.DataFrame): DataFrame contenente almeno le colonne 'Temperature' e 'Energy', riferite a dati normal.
+        bic_threshold (float): Soglia minima per il miglioramento relativo del BIC per accettare un numero di componenti maggiore.
+
+    Returns:
+        Tuple:
+            - df (pd.DataFrame): DataFrame con una nuova colonna 'Mode' che assegna a ogni punto la modalità operativa identificata.
+            - best_gmm (GaussianMixture or None): Il modello GMM selezionato, oppure None se non valido.
+            - scaler (StandardScaler): Lo scaler usato per normalizzare i dati, utile per trasformare nuovi input.
+            - (Δ1→2, Δ2→3) (Tuple[float or None, float or None]): Miglioramenti relativi di BIC tra 1→2 e 2→3 componenti.
+            - rollback_flag (bool): True se almeno un modello con più componenti è stato scartato per via di cluster troppo piccoli.
     """
     df = df.dropna(subset=["Temperature", "Energy"])
     if df.empty or len(df) < 5:
         df["Mode"] = 0
-        return df
+        return df, None, None, (None, None), False
 
-    X = df[["Temperature", "Energy"]].values
+    x = df[["Temperature", "Energy"]].values
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    x_scaled = scaler.fit_transform(x)
 
-    gmm1 = GaussianMixture(n_components=1, random_state=0).fit(X_scaled)
-    gmm2 = GaussianMixture(n_components=2, random_state=0).fit(X_scaled)
+    def fit_gmm(x_scaled, n_components):
+        """
+        - Fitta un GMM con il numero 'n_components' di componenti.
+        - Controlla che tutti i cluster abbiano almeno 5 punti.
+            - Se sì → restituisce il modello, i label di appartenenza dei dati, BIC, e False (nessun cluster piccolo).
+            - Se no → scarta il modello, ritorna None e True (c’erano cluster piccoli).
+        """
+        gmm = GaussianMixture(n_components=n_components, random_state=0).fit(x_scaled)
+        labels = gmm.predict(x_scaled)
+        counts = pd.Series(labels).value_counts().sort_index()
 
-    bic1 = gmm1.bic(X_scaled)
-    bic2 = gmm2.bic(X_scaled)
+        if (counts >= 5).all():
+            return gmm, labels, gmm.bic(x_scaled), False
+        else:
+            return None, None, None, True
 
-    if bic1 - bic2 > bic_threshold:
-        df["Mode"] = gmm2.predict(X_scaled)
-        return df, gmm2, scaler
+    gmm1, labels1, bic1, flag1 = fit_gmm(x_scaled, 1)
+    gmm2, labels2, bic2, flag2 = fit_gmm(x_scaled, 2)
+    gmm3, labels3, bic3, flag3 = fit_gmm(x_scaled, 3)
+
+    if gmm3 and not flag3 and bic2 and ((bic2 - bic3) / abs(bic2)) > bic_threshold:
+        df["Mode"] = labels3
+        return df, gmm3, scaler, ((bic1 - bic2) / abs(bic1), (bic2 - bic3) / abs(bic2)), False
+    elif gmm2 and not flag2 and bic1 and ((bic1 - bic2) / abs(bic1)) > bic_threshold:
+        df["Mode"] = labels2
+        return df, gmm2, scaler, ((bic1 - bic2) / abs(bic1), None), False
+    elif gmm1:
+        df["Mode"] = labels1
+        return df, gmm1, scaler, (None, None), flag2 or flag3
     else:
         df["Mode"] = 0
-        return df, gmm1, scaler
+        return df, None, scaler, (None, None), True
 
 
 
-def run_change_point(case_study: str, penalty: int, norm_for_check_term_sens: any = (True, "zscore"), scaling_method_for_change_point: str = "zscore"):
+def run_change_point(case_study: str, penalty: int, bic_threshold:float = 0.2 ,norm_for_check_term_sens: any = (True, "zscore"), scaling_method_for_change_point: str = "zscore"):
     """
     Esegue l'analisi di segmentazione per ogni foglia del caso studio. Per ciascun segmento rilevato tramite
     change point detection, verifica se è termicamente sensibile e, se sì, calcola i residui e la probabilità
@@ -167,30 +216,44 @@ def run_change_point(case_study: str, penalty: int, norm_for_check_term_sens: an
                 df_normals_sorted = df_normals.sort_values("Temperature").dropna(subset=["Temperature", "Energy"])
                 # df_normals_sorted = df_normals_sorted[df_normals_sorted["Energy"] > 0]
 
-                df_modes, best_gmm, scaler = identify_operational_modes(df_normals_sorted, bic_threshold=100)
-
+                df_modes, best_gmm, scaler, (imp12, imp23), flag = operational_modes_detection(df_normals_sorted, bic_threshold)
                 for mode in sorted(df_modes["Mode"].unique()):
                     df_mode = df_modes[df_modes["Mode"] == mode]
-                    if len(df_mode) < 5:
-                        continue
 
-                    signal = df_mode[["Temperature", "Energy"]].values
-                    signal_scaled = scale_data(signal, method=scaling_method_for_change_point)
-                    algo = rpt.Pelt(model="rank").fit(signal_scaled)
-                    change_points = algo.predict(pen=penalty)
+                    X_check = df_mode[["Temperature", "Energy"]]
+                    if X_check.nunique().min() < 2:
+                        # Valori costanti → un solo segmento
+                        segmenti = [(0, len(df_mode))]
+                        manual_override = True
+                    else:
+                        signal = X_check.values
+                        signal_scaled = scale_data(signal, method=scaling_method_for_change_point)
+                        algo = rpt.Pelt(model="rank").fit(signal_scaled)
+                        change_points = algo.predict(pen=penalty)
+                        segmenti = [(start, end) for start, end in zip([0] + change_points[:-1], change_points)]
+                        manual_override = False
 
-                    start = 0
                     segments_in_mode = []
-                    for i, end in enumerate(change_points):
+                    for i, (start, end) in enumerate(segmenti):
                         segment = df_mode.iloc[start:end]
                         t_min = segment["Temperature"].min()
                         t_max = segment["Temperature"].max()
                         metrics = check_thermal_sensitivity(segment, normalize=thermal_scaling)
 
                         segment_results.append({
-                            "Context": context, "Cluster": cluster, "Mode": mode,
-                            "Segmento": i + 1, "t_min": t_min, "t_max": t_max,
-                            "Thermal Sensitive": metrics["is_thermal_sensitive"]
+                            "Context": context,
+                            "Cluster": cluster,
+                            "Mode": mode,
+                            "Segmento": i + 1,
+                            "t_min": t_min,
+                            "t_max": t_max,
+                            "Thermal Sensitive": metrics["is_thermal_sensitive"],
+                            "correlation": metrics["correlation"],
+                            "slope": metrics["slope"],
+                            "r2_score": metrics["r2_score"],
+                            "corr_thresh": metrics["corr_thresh"],
+                            "slope_thresh": metrics["slope_thresh"],
+                            "r2_thresh": metrics["r2_thresh"]
                         })
 
                         segments_in_mode.append({
@@ -209,7 +272,28 @@ def run_change_point(case_study: str, penalty: int, norm_for_check_term_sens: an
 
                     segment_map[(context, cluster, mode)] = segments_in_mode
 
-                summary = f"[Ctx {context} | Clst {cluster}] -> "
+                fallback = "↩️ " if flag else ""
+
+                if imp12 is not None and imp23 is not None:
+                    # GMM(3) selezionato
+                    color_12 = "\033[92m"  # verde
+                    color_23 = "\033[92m"  # verde
+                elif imp12 is not None and imp23 is None:
+                    # GMM(2) selezionato
+                    color_12 = "\033[92m"  # verde
+                    color_23 = "\033[91m"  # rosso
+                else:
+                    # GMM(1) selezionato
+                    color_12 = "\033[91m"
+                    color_23 = "\033[91m"
+
+                imp12_str = f"{color_12}{imp12:.1%}\033[0m" if imp12 is not None else "\033[91mN/A\033[0m"
+                imp23_str = f"{color_23}{imp23:.1%}\033[0m" if imp23 is not None else "\033[91mN/A\033[0m"
+
+                summary = (
+                    f"[Ctx {context} | Clst {cluster}]      "
+                    f"({fallback}Δ1→2: {imp12_str} → Δ2→3: {imp23_str})  -> "
+                )
                 mode_summaries = []
 
                 for m in sorted(df_modes["Mode"].unique()):
@@ -223,9 +307,10 @@ def run_change_point(case_study: str, penalty: int, norm_for_check_term_sens: an
                     else:
                         ts_text = f"({thermal_segments}/{total_segments} Thermal sensitive)"
 
-                    mode_summaries.append(f"Mode {m+1} - {total_segments} segments {ts_text}")
+                    mode_summaries.append(f"{' ⚠️' if manual_override else ''}Mode {m+1} - {total_segments} segments {ts_text}")
 
-                summary += f"{len(mode_summaries)} operational modes : " + " | ".join(mode_summaries)
+                summary += f"{len(mode_summaries)} operational modes: " + " | ".join(mode_summaries)
+
                 print(summary)
 
                 # Predict mode for all points (normals + anomalies)
@@ -286,7 +371,11 @@ def run_change_point(case_study: str, penalty: int, norm_for_check_term_sens: an
                 residual = row.Energy - y_pred
                 sigma = model_info["sigma"]
                 theta = 9 / (2 * np.log(2))
-                prob = 1 - np.exp(-(residual ** 2) / (2 * theta * sigma ** 2))
+
+                if residual > 0:
+                    prob = 1 - np.exp(-(residual ** 2) / (2 * theta * sigma ** 2))
+                else:
+                    prob = 0
 
                 residuals.append(residual)
                 probs.append(prob)
@@ -314,4 +403,4 @@ def run_change_point(case_study: str, penalty: int, norm_for_check_term_sens: an
 
 
 if __name__ == "__main__":
-    run_change_point(case_study="Cabina", penalty=100)
+    run_change_point(case_study="Cabina", penalty=100, norm_for_check_term_sens = False)

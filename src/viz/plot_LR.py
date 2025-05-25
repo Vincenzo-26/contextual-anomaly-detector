@@ -103,7 +103,7 @@ def plot_logistic_regression(case_study: str, foglia: str, context: int, cluster
     )
 
     if save_plot:
-        output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "plot_GMM_LR")
+        output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "plot_LR")
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, f"{foglia}_ctx{context}_cls{cluster}.html")
         fig.write_html(output_file, include_plotlyjs="cdn")
@@ -126,4 +126,8 @@ if __name__ == "__main__":
                     plot_logistic_regression(case_study, foglia, ctx, cls, save_plot)
 
     else:
-        plot_logistic_regression(case_study=case_study, foglia="QE UTA 3_3B_7", context=3, cluster=3, save_plot=save_plot)
+        plot_logistic_regression(case_study=case_study,
+                                 foglia="QE UTA 3_3B_7",
+                                 context=3,
+                                 cluster=3,
+                                 save_plot=save_plot)
