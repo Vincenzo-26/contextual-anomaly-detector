@@ -6,6 +6,7 @@ from sklearn.neighbors import KNeighborsClassifier
 import hdbscan
 from scipy.spatial.distance import cdist
 from datetime import datetime
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler
 import os
 import pandas as pd
 from datetime import datetime
@@ -298,6 +299,21 @@ def get_nodes_by_level(load_tree: dict) -> list[list[str]]:
 
     max_level = max(levels_dict.keys())
     return [levels_dict[i] for i in reversed(range(max_level + 1))]  # bottom-up
+
+def scale_data(X, method):
+    if method is False:
+        return X
+    method = method.lower()
+    if method == "zscore":
+        return StandardScaler().fit_transform(X)
+    elif method == "minmax":
+        return MinMaxScaler().fit_transform(X)
+    elif method == "robust":
+        return RobustScaler().fit_transform(X)
+    elif method == "maxabs":
+        return MaxAbsScaler().fit_transform(X)
+    else:
+        raise ValueError(f"Metodo di normalizzazione non supportato: '{method}'")
 
 
 if __name__ == "__main__":

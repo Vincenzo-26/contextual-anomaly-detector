@@ -2,21 +2,22 @@ import os
 from utils import *
 import json
 
-def tempered_soft_or(row, gamma=5):
-    pe = row["energy_anomaly_prob"]
-    pt = row["temp_anomaly_prob"]
-    if not row["thermal_sensitive"]:
-        return pe
-    combined = 1 - (1 - pe) * (1 - pt)
-    return combined ** gamma
-def combine_soft_evidence(case_study: str, gamma: int = 5):
+
+def tempered_soft_or(row):
+    if row["thermal_sensitive"]:
+        return row["temp_anomaly_prob"]
+    else:
+        return row["energy_anomaly_prob"]
+
+
+def combine_soft_evidence(case_study: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
     titolo = f"Combination of Energy and Temperature results for '{case_study}'🔌🌡️"
     print_boxed_title(titolo)
 
-    energy_folder_path = os.path.join(PROJECT_ROOT, "results", case_study, "Evidences_EM")
+    energy_folder_path = os.path.join(PROJECT_ROOT, "results", case_study, "Evidences_LR")
     temp_folder_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "residuals")
     output_folder = os.path.join(PROJECT_ROOT, "results", case_study, "soft_evidences")
     os.makedirs(output_folder, exist_ok=True)
@@ -46,7 +47,7 @@ def combine_soft_evidence(case_study: str, gamma: int = 5):
         df_merged = df_energy.merge(df_temp, on=["Date", "Context", "Cluster"], how="left")
         df_merged["thermal_sensitive"] = df_merged["temp_anomaly_prob"].notna()
 
-        df_merged["anomaly_prob"] = df_merged.apply(lambda row: tempered_soft_or(row, gamma=gamma), axis=1)
+        df_merged["anomaly_prob"] = df_merged.apply(lambda row: tempered_soft_or(row), axis=1)
 
         ordered_cols = ["Date", "Context", "Cluster", "Energy", "Temperature", "energy_anomaly_prob", "temp_anomaly_prob",
                          "anomaly_prob", "is_real_anomaly", "thermal_sensitive"]
@@ -58,7 +59,7 @@ def combine_soft_evidence(case_study: str, gamma: int = 5):
     print("\nAnomaly probabilities calculated ✅     -> ready for bayesian inference\n\n")
 
 if __name__ == "__main__":
-    combine_soft_evidence("Cabina", 5)
+    combine_soft_evidence("Cabina")
 
 
 

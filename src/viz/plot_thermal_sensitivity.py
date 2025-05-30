@@ -5,9 +5,10 @@ import numpy as np
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 from src.utils import PROJECT_ROOT
+import matplotlib.pyplot as plt
 
 
-def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int, save_plot: bool):
+def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int, save_plot: bool, png: bool = False):
     base_dir = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity")
     path_segments = os.path.join(base_dir, "segments", f"segment_{sottocarico}.csv")
     path_residuals = os.path.join(base_dir, "residuals", f"residuals_{sottocarico}.csv")
@@ -120,13 +121,58 @@ def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int
         template="plotly_white"
     )
 
-    if save_plot:
+    if save_plot and png:
+        plt.figure(figsize=(8, 5))
+        for mode in modes:
+            df_mode = df_residuals[df_residuals["Mode"] == mode]
+            df_normal = df_mode[df_mode["is_real_anomaly"] == False]
+            df_anomalous = df_mode[df_mode["is_real_anomaly"] == True]
+
+            plt.scatter(df_normal["Temperature"], df_normal["Energy"],
+                        label=f"Mode {mode} - Normali", s=10, alpha=0.7)
+
+            plt.scatter(df_anomalous["Temperature"], df_anomalous["Energy"],
+                        label=f"Mode {mode} - Anomali", s=20, marker="x")
+
+            df_mode_seg = df_segments[df_segments["Mode"] == mode]
+            for seg_id in df_mode_seg["Segmento"].unique():
+                seg_info = df_mode_seg[df_mode_seg["Segmento"] == seg_id].iloc[0]
+                is_sensitive = seg_info["Thermal Sensitive"]
+
+                df_seg = df_mode[(df_mode["assigned_segment"] == seg_id) & (~df_mode["is_real_anomaly"])]
+                if df_seg.empty:
+                    continue
+
+                X = df_seg["Temperature"].values.reshape(-1, 1)
+                y = df_seg["Energy"].values
+                model = LinearRegression().fit(X, y)
+
+                x_line = np.linspace(df_seg["Temperature"].min(), df_seg["Temperature"].max(), 100)
+                y_line = model.predict(x_line.reshape(-1, 1))
+                color = "green" if is_sensitive else "red"
+                plt.plot(x_line, y_line, color=color, linestyle='--', linewidth=1)
+
+        plt.title(f"{sottocarico} | Context {context} – Cluster {cluster}")
+        plt.xlabel("Temperature")
+        plt.ylabel("Energy")
+        plt.legend(fontsize=6, loc='best')
+        plt.tight_layout()
+
+        output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "plot_thermal_sens_png_not_norm")
+        os.makedirs(output_dir, exist_ok=True)
+        output_png = os.path.join(output_dir, f"{sottocarico}_ctx{context}_cls{cluster}.png")
+        plt.savefig(output_png, dpi=200)
+        plt.close()
+        print(f"Saved {sottocarico}_ctx{context}_cls{cluster}.png")
+
+    elif save_plot and not png:
         output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "plot_thermal_sens")
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, f"{sottocarico}_ctx{context}_cls{cluster}.html")
         fig.write_html(output_file, include_plotlyjs="cdn")
         print(f"Saved {sottocarico}_ctx{context}_cls{cluster}.html")
-    else:
+
+    elif not save_plot and not png:
         fig.show()
 
 
@@ -135,6 +181,7 @@ def plot_residuals(case_study: str, sottocarico: str, context: int, cluster: int
 if __name__ == "__main__":
     case_study = "Cabina"
     save_plot = True
+    png = True
 
     if save_plot:
         with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
@@ -143,7 +190,7 @@ if __name__ == "__main__":
         for foglia in foglie:
             for cls in range(1, 6):
                 for ctx in range(1, 6):
-                    plot_residuals(case_study, foglia, ctx, cls, save_plot)
+                    plot_residuals(case_study, foglia, ctx, cls, save_plot=save_plot, png=png)
 
     else:
         plot_residuals(
@@ -151,5 +198,6 @@ if __name__ == "__main__":
             sottocarico="QE UTA 1_1B_5",
             context=4,
             cluster=3,
-            save_plot=save_plot
+            save_plot=save_plot,
+            png=png
         )

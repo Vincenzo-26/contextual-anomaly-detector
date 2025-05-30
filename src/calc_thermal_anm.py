@@ -5,35 +5,19 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error
 from scipy.stats import spearmanr
 import ruptures as rpt
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler
 from src.utils import *
 from sklearn.mixture import GaussianMixture
 import warnings
 from scipy.stats import ConstantInputWarning
 
-def scale_data(X, method="zscore"):
-    method = method.lower()
-    if method == "zscore":
-        return StandardScaler().fit_transform(X)
-    elif method == "minmax":
-        return MinMaxScaler().fit_transform(X)
-    elif method == "robust":
-        return RobustScaler().fit_transform(X)
-    elif method == "maxabs":
-        return MaxAbsScaler().fit_transform(X)
-    elif method == "none":
-        return X
-    else:
-        raise ValueError(f"Metodo di normalizzazione non supportato: '{method}'")
 
-
-def check_thermal_sensitivity(df_segment, normalize="Zscore", corr_thresh=0.5, r2_thresh=0.5, slope_thresh=0.2):
+def check_thermal_sensitivity(df_segment, norm_method="Zscore", corr_thresh=0.5, r2_thresh=0.5, slope_thresh=0.2):
     """
     Verifica se un segmento è termicamente sensibile usando correlazione, pendenza e R².
 
     Args:
         df_segment (pd.DataFrame): Segmento con colonne 'Temperature' e 'Energy'.
-        normalize (str or bool): Metodo di normalizzazione ('Zscore', 'minmax', 'robust', 'maxabs', 'none' o False).
+        norm_method (str or bool): Metodo di normalizzazione ('Zscore', 'minmax', 'robust', 'maxabs', 'none' o False).
         corr_thresh (float): Soglia di correlazione.
         r2_thresh (float): Soglia R².
         slope_thresh (float): Soglia della pendenza.
@@ -50,7 +34,7 @@ def check_thermal_sensitivity(df_segment, normalize="Zscore", corr_thresh=0.5, r
             "slope": np.nan,
             "r2_score": np.nan,
             "is_thermal_sensitive": False,
-            "scaling_used": normalize,
+            "scaling_used": norm_method,
             "corr_thresh": corr_thresh,
             "slope_thresh": slope_thresh,
             "r2_thresh": r2_thresh
@@ -65,14 +49,11 @@ def check_thermal_sensitivity(df_segment, normalize="Zscore", corr_thresh=0.5, r
             print("⚠️ Segmento con input costante: impossibile calcolare la correlazione.")
             corr = np.nan
 
-    # Determina tipo di normalizzazione
-    method = str(normalize).lower() if normalize not in [False, None] else "none"
+    method = str(norm_method).lower() if norm_method not in [False, None] else "none"
 
-    # Applica normalizzazione a X e y
     X = scale_data(X_raw, method)
     y = scale_data(y_raw, method).flatten()
 
-    # Regressione
     model = LinearRegression().fit(X, y)
     slope = model.coef_[0]
     r2 = r2_score(y, model.predict(X))
@@ -91,7 +72,7 @@ def check_thermal_sensitivity(df_segment, normalize="Zscore", corr_thresh=0.5, r
     }
 
 
-def operational_modes_detection(df: pd.DataFrame, bic_threshold: float):
+def operational_modes_detection(df: pd.DataFrame, norm_for_oper_mode: any):
     """
     Identifica le modalità operative di un sistema basandosi sui dati di Temperatura ed Energia,
     utilizzando Gaussian Mixture Models (GMM) con fino a 3 componenti.
@@ -120,8 +101,26 @@ def operational_modes_detection(df: pd.DataFrame, bic_threshold: float):
         return df, None, None, (None, None), False
 
     x = df[["Temperature", "Energy"]].values
-    scaler = StandardScaler()
-    x_scaled = scaler.fit_transform(x)
+
+    if norm_for_oper_mode is False:
+        method = "none"
+    elif norm_for_oper_mode is True:
+        method = "zscore"
+    elif isinstance(norm_for_oper_mode, (tuple, list)) and norm_for_oper_mode[0] is True:
+        method = norm_for_oper_mode[1].lower()
+    else:
+        raise ValueError(f"Parametro non valido per norm_for_oper_mode: {norm_for_oper_mode}")
+
+    x_scaled = scale_data(x, method)
+    scaler = None if method == "none" else {
+        "zscore": StandardScaler(),
+        "minmax": MinMaxScaler(),
+        "robust": RobustScaler(),
+        "maxabs": MaxAbsScaler()
+    }.get(method, StandardScaler())
+
+    if scaler is not None:
+        scaler.fit(x)
 
     def fit_gmm(x_scaled, n_components):
         """
@@ -143,22 +142,33 @@ def operational_modes_detection(df: pd.DataFrame, bic_threshold: float):
     gmm2, labels2, bic2, flag2 = fit_gmm(x_scaled, 2)
     gmm3, labels3, bic3, flag3 = fit_gmm(x_scaled, 3)
 
-    if gmm3 and not flag3 and bic2 and ((bic2 - bic3) / abs(bic2)) > bic_threshold:
-        df["Mode"] = labels3
-        return df, gmm3, scaler, ((bic1 - bic2) / abs(bic1), (bic2 - bic3) / abs(bic2)), False
-    elif gmm2 and not flag2 and bic1 and ((bic1 - bic2) / abs(bic1)) > bic_threshold:
-        df["Mode"] = labels2
-        return df, gmm2, scaler, ((bic1 - bic2) / abs(bic1), None), False
-    elif gmm1:
-        df["Mode"] = labels1
-        return df, gmm1, scaler, (None, None), flag2 or flag3
-    else:
+    models = []
+    if gmm1 and not flag1:
+        models.append((1, gmm1, labels1, bic1))
+    if gmm2 and not flag2:
+        models.append((2, gmm2, labels2, bic2))
+    if gmm3 and not flag3:
+        models.append((3, gmm3, labels3, bic3))
+
+    if not models:
         df["Mode"] = 0
-        return df, None, scaler, (None, None), True
+        return df, None, scaler, (None, None, None), True
+
+    # Scegli il modello col BIC più basso
+    best_n, best_gmm, best_labels, best_bic = min(models, key=lambda x: x[3])
+    df["Mode"] = best_labels
+
+    # Restituisci tutti e tre i BIC se disponibili
+    bics = (
+        round(bic1, 2) if bic1 is not None else None,
+        round(bic2, 2) if bic2 is not None else None,
+        round(bic3, 2) if bic3 is not None else None
+    )
+
+    return df, best_gmm, scaler, bics, (flag1 or flag2 or flag3)
 
 
-
-def run_change_point(case_study: str, penalty: int, bic_threshold:float = 0.2 ,norm_for_check_term_sens: any = (True, "zscore"), scaling_method_for_change_point: str = "zscore"):
+def run_change_point(case_study: str, penalty: int ,norm_for_check_term_sens: any = (True, "zscore"), norm_for_oper_mode: any = (True, "zscore"), scaling_method_for_change_point: str = "zscore"):
     """
     Esegue l'analisi di segmentazione per ogni foglia del caso studio. Per ciascun segmento rilevato tramite
     change point detection, verifica se è termicamente sensibile e, se sì, calcola i residui e la probabilità
@@ -177,6 +187,17 @@ def run_change_point(case_study: str, penalty: int, bic_threshold:float = 0.2 ,n
 
     foglie = find_leaf_nodes(config["Load Tree"])
     print_boxed_title(f"Thermal sensitivity analysis for '{case_study}'🌡️")
+
+    if norm_for_oper_mode is False:
+        print(f"Data not normalized for operational mode detection")
+    elif norm_for_oper_mode is True:
+        oper_mode_scaling = "Zscore"
+        print(f"Normalized data for operational mode detection    -> Method: {oper_mode_scaling} (default)\n")
+    elif isinstance(norm_for_oper_mode, (tuple, list)) and norm_for_oper_mode[0] is True:
+        oper_mode_scaling = norm_for_oper_mode[1]
+        print(f"Normalized data for operational mode detection    -> Method: {oper_mode_scaling}\n")
+    else:
+        raise ValueError(f"Parametro non valido per norm_for_oper_mode: {norm_for_oper_mode}")
 
     print(f"Normalization method for change point detection: {scaling_method_for_change_point}")
 
@@ -216,7 +237,8 @@ def run_change_point(case_study: str, penalty: int, bic_threshold:float = 0.2 ,n
                 df_normals_sorted = df_normals.sort_values("Temperature").dropna(subset=["Temperature", "Energy"])
                 # df_normals_sorted = df_normals_sorted[df_normals_sorted["Energy"] > 0]
 
-                df_modes, best_gmm, scaler, (imp12, imp23), flag = operational_modes_detection(df_normals_sorted, bic_threshold)
+                df_modes, best_gmm, scaler, (bic1, bic2, bic3), flag = operational_modes_detection(df_normals_sorted, norm_for_oper_mode)
+
                 for mode in sorted(df_modes["Mode"].unique()):
                     df_mode = df_modes[df_modes["Mode"] == mode]
 
@@ -238,7 +260,7 @@ def run_change_point(case_study: str, penalty: int, bic_threshold:float = 0.2 ,n
                         segment = df_mode.iloc[start:end]
                         t_min = segment["Temperature"].min()
                         t_max = segment["Temperature"].max()
-                        metrics = check_thermal_sensitivity(segment, normalize=thermal_scaling)
+                        metrics = check_thermal_sensitivity(segment, norm_method=thermal_scaling)
 
                         segment_results.append({
                             "Context": context,
@@ -274,31 +296,23 @@ def run_change_point(case_study: str, penalty: int, bic_threshold:float = 0.2 ,n
 
                 fallback = "↩️ " if flag else ""
 
-                if imp12 is not None and imp23 is not None:
-                    # GMM(3) selezionato
-                    color_12 = "\033[92m"  # verde
-                    color_23 = "\033[92m"  # verde
-                elif imp12 is not None and imp23 is None:
-                    # GMM(2) selezionato
-                    color_12 = "\033[92m"  # verde
-                    color_23 = "\033[91m"  # rosso
-                else:
-                    # GMM(1) selezionato
-                    color_12 = "\033[91m"
-                    color_23 = "\033[91m"
+                selected_bic = min(b for b in [bic1, bic2, bic3] if b is not None)
 
-                imp12_str = f"{color_12}{imp12:.1%}\033[0m" if imp12 is not None else "\033[91mN/A\033[0m"
-                imp23_str = f"{color_23}{imp23:.1%}\033[0m" if imp23 is not None else "\033[91mN/A\033[0m"
+                def color_bic(bic_val):
+                    if bic_val is None:
+                        return "\033[90mN/A\033[0m"
+                    color = "\033[92m" if bic_val == selected_bic else "\033[91m"
+                    return f"{color}{bic_val:.1f}\033[0m"
 
                 summary = (
                     f"[Ctx {context} | Clst {cluster}]      "
-                    f"({fallback}Δ1→2: {imp12_str} → Δ2→3: {imp23_str})  -> "
+                    f"({fallback}BIC1: {color_bic(bic1)} | BIC2: {color_bic(bic2)} | BIC3: {color_bic(bic3)})  -> "
                 )
                 mode_summaries = []
-
                 for m in sorted(df_modes["Mode"].unique()):
                     total_segments = sum(1 for seg in segment_results
-                                         if seg["Context"] == context and seg["Cluster"] == cluster and seg["Mode"] == m)
+                                         if
+                                         seg["Context"] == context and seg["Cluster"] == cluster and seg["Mode"] == m)
                     thermal_segments = sum(1 for seg in segment_results
                                            if seg["Context"] == context and seg["Cluster"] == cluster and
                                            seg["Mode"] == m and seg["Thermal Sensitive"])
@@ -307,10 +321,9 @@ def run_change_point(case_study: str, penalty: int, bic_threshold:float = 0.2 ,n
                     else:
                         ts_text = f"({thermal_segments}/{total_segments} Thermal sensitive)"
 
-                    mode_summaries.append(f"{' ⚠️' if manual_override else ''}Mode {m+1} - {total_segments} segments {ts_text}")
+                    mode_summaries.append(f"Mode {m + 1} - {total_segments} segments {ts_text}")
 
                 summary += f"{len(mode_summaries)} operational modes: " + " | ".join(mode_summaries)
-
                 print(summary)
 
                 # Predict mode for all points (normals + anomalies)
@@ -318,7 +331,10 @@ def run_change_point(case_study: str, penalty: int, bic_threshold:float = 0.2 ,n
                 df_all = df_all.reset_index().rename(columns={"index": "Date"})
                 df_all["Context"] = context
                 df_all["Cluster"] = cluster
-                df_all["Mode"] = best_gmm.predict(scaler.transform(df_all[["Temperature", "Energy"]].values))
+                X_all = df_all[["Temperature", "Energy"]].values
+                if scaler is not None:
+                    X_all = scaler.transform(X_all)
+                df_all["Mode"] = best_gmm.predict(X_all)
                 df_all["is_real_anomaly"] = df_all["Date"].isin(df_anomalies.index) if df_anomalies is not None else False
                 all_rows.append(df_all)
 
@@ -401,6 +417,5 @@ def run_change_point(case_study: str, penalty: int, bic_threshold:float = 0.2 ,n
         print("\nCalculated residuals and thermal anomaly probability ✅\n")
 
 
-
 if __name__ == "__main__":
-    run_change_point(case_study="Cabina", penalty=100, norm_for_check_term_sens = False)
+    run_change_point("Cabina", 50,  False, False)
