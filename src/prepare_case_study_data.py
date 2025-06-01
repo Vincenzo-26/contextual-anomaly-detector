@@ -1,4 +1,7 @@
-from utils import *
+import os
+import pandas as pd
+from settings import PROJECT_ROOT
+from utils import find_parents_of_leaves, clean_time_series
 import json
 from collections import defaultdict
 
@@ -102,6 +105,26 @@ def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
         total_df = df_all.groupby("timestamp", as_index=False)["value"].sum()
         output_dir = os.path.join(PROJECT_ROOT, "data", case_study)
         total_df.to_csv(os.path.join(output_dir, f"{case_study}.csv"), index=False)
+
+    raw_path_temp = os.path.join(PROJECT_ROOT, "raw_data", "Temperatura Esterna.csv")
+    if not os.path.exists(raw_path_temp):
+        print(f"⚠️ File temperatura non trovato: {raw_path_temp}")
+        return
+
+    df_temp = pd.read_csv(raw_path_temp, index_col=0, parse_dates=True)
+    df_temp_clean = clean_time_series(df_temp)
+
+    df_temp_aligned = df_temp_clean.loc[common_start:common_end]
+    df_temp_aligned = df_temp_aligned.reindex(aligned_index)
+
+    df_temp_out = df_temp_aligned.copy()
+    df_temp_out.columns = ["value"]
+    df_temp_out["timestamp"] = aligned_index
+    df_temp_out = df_temp_out[["timestamp", "value"]]
+
+    output_dir = os.path.join(PROJECT_ROOT, "data", case_study)
+    os.makedirs(output_dir, exist_ok=True)
+    df_temp_out.to_csv(os.path.join(output_dir, "Temperatura Esterna.csv"), index=False)
 
     print(f"✅ avaiable data for {case_study}")
 

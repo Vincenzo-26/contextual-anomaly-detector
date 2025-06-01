@@ -21,7 +21,7 @@ def print_boxed_title(title: str, side_padding: int = 15):
     print(f"{spaces}{title}{spaces}")
     print(f"{border}\n")
 
-def clean_time_series(df: pd.DataFrame, unit: str = "W") -> pd.DataFrame:
+def clean_time_series(df: pd.DataFrame, unit: str = None) -> pd.DataFrame:
     """
     Pulisce e riallinea un DataFrame temporale con indice datetime.
     Converte in watt se i dati sono in kWh o Wh.
@@ -45,15 +45,16 @@ def clean_time_series(df: pd.DataFrame, unit: str = "W") -> pd.DataFrame:
     if df[df.index.normalize() == last_day].index.max().time() != pd.Timestamp("23:45").time():
         df = df[df.index.normalize() < last_day]
 
-    # 🔁 Conversione in watt (se serve)
-    if unit.lower() == "kwh":
-        df = df * 4000
-    elif unit.lower() == "wh":
-        df = df * (1000 / 0.25)  # = 4000
-    elif unit.lower() == "w":
-        pass  # nessuna conversione necessaria
-    else:
-        print(f"⚠️ Unità sconosciuta: {unit} - nessuna conversione applicata.")
+    if unit:
+        # 🔁 Conversione in watt (se serve)
+        if unit.lower() == "kwh":
+            df = df * 4000
+        elif unit.lower() == "wh":
+            df = df * (1000 / 0.25)  # = 4000
+        elif unit.lower() == "w":
+            pass  # nessuna conversione necessaria
+        else:
+            print(f"⚠️ Unità sconosciuta: {unit} - nessuna conversione applicata.")
 
     return df
 
@@ -197,39 +198,24 @@ def run_energy_in_tw(case_study: str, sottocarico: str):
 
     return pd.DataFrame(results)
 
-def optimize_hdbscan_cluster_size(X, min_size_start=3, max_size_ratio=0.5, step=2):
+def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: int):
     """
-    Trova il valore ottimale di min_cluster_size che minimizza il rumore (label -1),
-    aumentando progressivamente il valore fino a che i punti sono tutti assegnati.
+    Estrae i dati energetici e di temperatura esterna per una specifica combinazione
+    di sottocarico - context - cluster, restituendo due DataFrame per giorni normali e anomali.
 
     Args:
-        X (np.ndarray): array (n_samples, n_features) con i dati.
-        min_size_start (int): valore iniziale per min_cluster_size.
-        max_size_ratio (float): massimo rapporto rispetto al numero di punti.
-        step (int): incremento per ogni iterazione.
+        case_study : (str) Nome dello studio di caso (cartella dei dati).
+        sottocarico : (str) Nome del nodo foglia (sottocarico) del grafo dei carichi.
+        context : (int) ID del contesto temporale (fascia oraria specifica).
+        cluster : (int) ID del cluster da analizzare.
 
     Returns:
-        dict: con chiavi {"best_size", "labels", "probs", "n_noise"}
+        df_normals : (pd.DataFrame) DataFrame contenente, per ogni giorno normal (index), l'energia aggregata nel context
+            e la realtiva temperatura media. Colonne: ["Energy", "Temperature"].
+
+        df_anomalies : (pd.DataFrame) DataFrame con gli stessi campi di `df_normals` ma riferito a giorni anomali
+            secondo la tabella delle anomalie.
     """
-    N = len(X)
-    max_size = max(3, int(N * max_size_ratio))
-    best_result = None
-
-    for size in range(min_size_start, max_size + 1, step):
-        clusterer = hdbscan.HDBSCAN(min_cluster_size=size)
-        labels = clusterer.fit_predict(X)
-        probs = clusterer.probabilities_
-        n_noise = np.sum(labels == -1)
-
-        if n_noise == 0:
-            return {"best_size": size, "labels": labels, "probs": probs, "n_noise": 0}
-
-        if best_result is None or n_noise < best_result["n_noise"]:
-            best_result = {"best_size": size, "labels": labels, "probs": probs, "n_noise": n_noise}
-
-    return best_result
-
-def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: int):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
@@ -282,6 +268,110 @@ def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: in
     df_anomalies = df_grouped[df_grouped.index.isin(anomalous_dates)]
     df_normals = df_grouped[~df_grouped.index.isin(anomalous_dates)]
 
+    return df_normals, df_anomalies
+
+def map_subload(subload_list: list, from_type: str, to_type: str):
+    if from_type == to_type:
+        raise ValueError("from_type e to_type devono essere diversi.")
+    unique_subloads = sorted(set(subload_list))
+    subload_to_num = {name: idx for idx, name in enumerate(unique_subloads)}
+    num_to_subload = {idx: name for name, idx in subload_to_num.items()}
+
+    if from_type == "subload" and to_type == "number":
+        return subload_to_num
+    elif from_type == "number" and to_type == "subload":
+        return num_to_subload
+    else:
+        raise ValueError("from_type e to_type devono essere 'subload' o 'number'.")
+
+def run_profile_power_temp(case_study: str, sottocarico: str, context: int, cluster: int):
+    """
+    per ogni giorno appartenente al cluster estrae i profili di potenza del sottocarico e di temperatura nella
+    time window relativa al context.
+    Restituisce due DataFrame: uno relativo ai giorni normali e uno
+    relativo a quelli anomali, etichettati sulla base della tabella delle anomalie.
+
+    Per ciascun giorno vengono calcolati:
+      - il profilo di potenza nella finestra oraria;
+      - il profilo di temperatura esterna corrispondente;
+      - la media della temperatura;
+      - il giorno della settimana (0=lunedì);
+      - il sottocarico identificato da un numero (per input alla ANN);
+      - il contesto e il cluster di appartenenza.
+
+    Args:
+        case_study (str): Nome del caso studio.
+        sottocarico (str): Nome del file CSV del sottocarico (es. 'Rooftop 1').
+        context (int): Numero del contesto.
+        cluster (int): Numero del cluster.
+
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]:
+            - df_normals: DataFrame con i giorni normali e le seguenti colonne:
+                ['power_profile', 'temp_profile', 'Mean_Temp', 'weekday', 'Subload', 'Context', 'Cluster']
+            - df_anomalies: DataFrame con i giorni anomali e le stesse colonne sopra elencate.
+    """
+    with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
+        config = json.load(f)
+    results_path = os.path.join(PROJECT_ROOT, "results", case_study)
+    anomaly_path = os.path.join(results_path, "anomaly_table")
+
+    df_leaf = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{sottocarico}.csv"), index_col=0, parse_dates=True)
+    df_temp = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{json.load(open(os.path.join(PROJECT_ROOT, 'data', case_study, 'config.json')))['Outside Temperature']}.csv"), index_col=0, parse_dates=True)
+    df_temp.columns = ["Temperatura Esterna"]
+    df_temp = df_temp.interpolate(method="time").bfill().ffill()
+    df_leaf.columns = ["Power"]
+
+    df_anm = pd.read_csv(os.path.join(anomaly_path, f"anomaly_table_{sottocarico}.csv"), index_col=0, parse_dates=True)
+    groups = pd.read_csv(os.path.join(results_path, "groups.csv"), index_col=0, parse_dates=True)
+    time_windows = pd.read_csv(os.path.join(results_path, "time_windows.csv"))
+    time_windows['to'] = time_windows['to'].replace('24:00', '23:59')
+
+    cluster_col = f"Cluster_{cluster}"
+    cluster_series = groups[cluster_col]
+    selected_dates = cluster_series[cluster_series == cluster].index.date if cluster_series.dtype != bool else cluster_series[cluster_series].index.date
+
+    df_leaf = df_leaf[pd.Series(df_leaf.index.date).isin(selected_dates).values]
+    selected_window = time_windows[time_windows["id"] == context].iloc[0]
+    from_hour = pd.to_datetime(selected_window['from'], format='%H:%M').time()
+    to_hour = pd.to_datetime(selected_window['to'], format='%H:%M').time()
+
+    levels = get_nodes_by_level(config["Load Tree"])
+    first_level = levels[0]
+    subload_map = map_subload(first_level, from_type="subload", to_type="number")
+
+    def is_in_window(ts):
+        t = ts.time()
+        return from_hour <= t < to_hour
+
+    df_merged = df_leaf.join(df_temp, how="inner")
+    df_merged = df_merged[df_merged.index.map(is_in_window)]
+
+    if df_merged.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    days = df_merged.index.date
+    daily_profiles = []
+    for date in np.unique(days):
+        day_mask = pd.Series(df_merged.index.date, index=df_merged.index) == date
+        day_df = df_merged[day_mask]
+        if day_df.empty:
+            continue
+        daily_profiles.append({
+            "Date": date,
+            "power_profile": day_df["Power"].tolist(),
+            "temp_profile": day_df["Temperatura Esterna"].tolist(),
+            "Mean_Temp": np.mean(day_df["Temperatura Esterna"]),
+            "weekday": pd.Timestamp(date).weekday(),
+            "Subload": subload_map[sottocarico],
+            "Context": context,
+            "Cluster": cluster
+        })
+
+    df_profiles = pd.DataFrame(daily_profiles).set_index("Date")
+    anomalous_dates = df_anm.index.date
+    df_anomalies = df_profiles[df_profiles.index.isin(anomalous_dates)].copy()
+    df_normals = df_profiles[~df_profiles.index.isin(anomalous_dates)].copy()
     return df_normals, df_anomalies
 
 def get_nodes_by_level(load_tree: dict) -> list[list[str]]:

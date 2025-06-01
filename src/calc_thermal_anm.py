@@ -217,6 +217,7 @@ def run_change_point(case_study: str, penalty: int ,norm_for_check_term_sens: an
         print(f"\033[91m{foglia}\033[0m")
         segment_results = []
         models_info = []
+        models_info = []
         segment_map = {}
 
         groups_path = os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv")
