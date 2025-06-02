@@ -18,17 +18,17 @@ def combine_soft_evidence(case_study: str):
     print_boxed_title(titolo)
 
     energy_folder_path = os.path.join(PROJECT_ROOT, "results", case_study, "Evidences_LR")
-    temp_folder_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "residuals")
+    temp_folder_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity")
     output_folder = os.path.join(PROJECT_ROOT, "results", case_study, "soft_evidences")
     os.makedirs(output_folder, exist_ok=True)
 
     foglie = find_leaf_nodes(config["Load Tree"])
 
     for foglia in foglie:
-        print(f"[{foglia}] Processing...", end="")
+        print(f"[{foglia}] Processing...    ", end="")
 
         df_energy = pd.read_csv(os.path.join(energy_folder_path, f"evd_{foglia}.csv"))
-        temp_path = os.path.join(temp_folder_path, f"residuals_{foglia}.csv")
+        temp_path = os.path.join(temp_folder_path, f"{foglia}.csv")
 
         if not os.path.exists(temp_path):
             df_energy["thermal_sensitive"] = False
@@ -54,7 +54,7 @@ def combine_soft_evidence(case_study: str):
         df_merged = df_merged[[col for col in ordered_cols if col in df_merged.columns]]
         output_path = os.path.join(output_folder, f"soft_evidence_{foglia}.csv")
         df_merged.to_csv(output_path, index=False)
-        print(f" Anomaly probabilities avaiable (energy and temperature mixed)")
+        print(f"Anomaly probabilities avaiable (energy and temperature)")
 
     print("\nAnomaly probabilities calculated ✅     -> ready for bayesian inference\n\n")
 

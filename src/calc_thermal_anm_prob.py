@@ -7,7 +7,8 @@ import ruptures as rpt
 from utils import run_energy_temp
 from settings import PROJECT_ROOT
 from src.utils import get_nodes_by_level
-from scipy.stats import norm, shapiro
+from scipy.stats import norm
+import matplotlib.colors as mcolors
 
 def calc_anm_prob(case_study: str, soglia_en_max: float):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json")) as f:
@@ -45,8 +46,9 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                 cluster = int(cluster_col.split("_")[-1])
                 print(f"[Ctx {context} | Clst {cluster}]...     ", end="")
                 df_normals, df_anomalous = run_energy_temp(case_study, leaf, context, cluster)
-
-                if df_normals is None or df_normals.empty:
+                if df_normals is not None and not df_normals.empty:
+                    df_normals = df_normals.reset_index().rename(columns={"index": "Date"})
+                else:
                     print("Nessun punto normal.")
                     continue
 
@@ -55,6 +57,7 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                 df_normals["anomalous"] = False
 
                 if df_anomalous is not None and not df_anomalous.empty:
+                    df_anomalous = df_anomalous.reset_index().rename(columns={"index": "Date"})
                     df_anomalous = df_anomalous.dropna(subset=["Temperature", "Energy"])
                     df_anomalous["Status"] = np.where(df_anomalous["Energy"] >= energy_cutoff, "ON", "OFF")
                     df_anomalous["anomalous"] = True
@@ -132,10 +135,10 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                     frames_to_concat.append(df_anomalous)
                 df_all = pd.concat(frames_to_concat, ignore_index=True)
                 df_all = df_all.sort_values("Temperature")
-                df_all[["Residuo", "Probabilità"]] = df_all.apply(compute_residual_prob, axis=1, result_type="expand")
-                df_all["leaf"] = leaf
-                df_all["context"] = context
-                df_all["cluster"] = cluster
+                df_all[["Residual", "prob_anomaly"]] = df_all.apply(compute_residual_prob, axis=1, result_type="expand")
+                df_all["Subload"] = leaf
+                df_all["Context"] = context
+                df_all["Cluster"] = cluster
                 all_residuals.append(df_all)
 
                 # Plot
@@ -146,13 +149,42 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                 fig, axs = plt.subplots(1, 2, figsize=(14, 5), gridspec_kw={'width_ratios': [2, 1]})
                 ax = axs[0]
 
-                ax.scatter(df_off["Temperature"], df_off["Energy"], color="gray", alpha=0.3, label="Normal OFF")
-                ax.scatter(df_on["Temperature"], df_on["Energy"], color="blue", alpha=0.4, label="Normal ON")
+                # Mappa blu → rosso
+                cmap = plt.get_cmap("coolwarm")
+                norm_color = mcolors.Normalize(vmin=0, vmax=1)
 
-                df_an_on = df_anomalous[df_anomalous["Status"] == "ON"]
-                df_an_off = df_anomalous[df_anomalous["Status"] == "OFF"]
-                ax.scatter(df_an_on["Temperature"], df_an_on["Energy"], color="red", alpha=0.6, label="Anomalous ON")
-                ax.scatter(df_an_off["Temperature"], df_an_off["Energy"], color="orange", alpha=0.6, label="Anomalous OFF")
+                # Punti OFF sempre grigi
+                df_off = df_all[df_all["Status"] == "OFF"]
+                ax.scatter(df_off["Temperature"], df_off["Energy"], color="gray", alpha=0.3, label="OFF", marker='o')
+
+                # Punti ON normal (cerchi)
+                df_on_norm = df_all[(df_all["Status"] == "ON") & (df_all["anomalous"] == False)]
+                sc1 = ax.scatter(
+                    df_on_norm["Temperature"], df_on_norm["Energy"],
+                    c=df_on_norm["prob_anomaly"], cmap=cmap, norm=norm_color,
+                    alpha=0.8, label="ON", marker='o'
+                )
+
+                # Punti ON anomalous (triangoli)
+                df_on_anm = df_all[(df_all["Status"] == "ON") & (df_all["anomalous"] == True)]
+                sc2 = ax.scatter(
+                    df_on_anm["Temperature"], df_on_anm["Energy"],
+                    c=df_on_anm["prob_anomaly"], cmap=cmap, norm=norm_color,
+                    alpha=0.8, label="ON Anomalous", marker='^'
+                )
+
+                # Linea soglia
+                ax.axhline(energy_cutoff, color="orange", linewidth=1, linestyle=":", label="Soglia ON/OFF")
+
+                # Aggiungi colorbar
+                cb = fig.colorbar(sc2, ax=ax)
+                cb.set_label("Prob. Anomalia")
+
+                ax.set_title(f"{leaf} | ctx {context} - cl {cluster}")
+                ax.set_xlabel("Temperatura")
+                ax.set_ylabel("Energia")
+                ax.legend()
+                ax.grid(True)
 
                 for model, Tmin, Tmax in segments:
                     T_plot = np.linspace(Tmin, Tmax, 100)
@@ -172,8 +204,7 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                     mu, std = np.mean(residui_normal), np.std(residui_normal)
                     x = np.linspace(min(bins), max(bins), 100)
                     ax2.plot(x, norm.pdf(x, mu, std), 'r--', label='Normale teorica')
-                    p_value = shapiro(residui_normal)[1]
-                    ax2.set_title(f"Residui - p = {p_value:.3f}")
+                    ax2.set_title(f"Residui")
                 else:
                     ax2.set_title("Residui non disponibili")
 
