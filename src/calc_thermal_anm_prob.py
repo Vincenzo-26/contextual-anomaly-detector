@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 from sklearn.mixture import GaussianMixture
 import seaborn as sns
 import matplotlib.gridspec as gridspec
+from sklearn.metrics import silhouette_score
+from sklearn.preprocessing import StandardScaler
 
 def calc_anm_prob(case_study: str, norm_method):
     """
@@ -38,6 +40,19 @@ def calc_anm_prob(case_study: str, norm_method):
             continue
 
         print(f"\033[91m{leaf}\033[0m")
+        E_max_leaf = 0
+        for context in context_ids:
+            for cluster_col in cluster_cols:
+                cluster = int(cluster_col.split("_")[-1])
+                df_normals, _ = run_energy_temp(case_study, leaf, context, cluster)
+                if df_normals is not None and "Energy" in df_normals.columns:
+                    max_energy = df_normals["Energy"].max()
+                    if pd.notna(max_energy):
+                        E_max_leaf = max(E_max_leaf, max_energy)
+
+        energy_cutoff = 0.1 * E_max_leaf  # 10% del massimo
+
+        # 2. Ora prosegui con la logica principale
         for context in context_ids:
             for cluster_col in cluster_cols:
                 cluster = int(cluster_col.split("_")[-1])
@@ -45,25 +60,55 @@ def calc_anm_prob(case_study: str, norm_method):
                 df_normals, df_anomalies = run_energy_temp(case_study, leaf, context, cluster)
 
                 df_normals = df_normals.dropna(subset=["Temperature", "Energy"]).copy()
-
-                # Filtro dei valori nulli o zero
                 df_normals = df_normals[df_normals["Energy"] > 0].copy()
                 if df_normals.empty:
                     continue
 
-                # Applica GMM per distinguere "on" e "off"
-                energy_raw = df_normals[["Energy"]].values
-                energy_scaled = scale_data(energy_raw, norm_method)
+                X_raw = df_normals[["Temperature", "Energy"]].values
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(X_raw)
 
-                gmm = GaussianMixture(n_components=2, random_state=0)
-                labels = gmm.fit_predict(energy_scaled)
+                gmm_1 = GaussianMixture(n_components=1, random_state=0).fit(X_scaled)
+                gmm_2 = GaussianMixture(n_components=2, covariance_type='full', random_state=0).fit(X_scaled)
 
-                # Determina quale componente è "on" (quella con media maggiore)
-                means = gmm.means_.flatten()
-                on_label = np.argmax(means)
-                df_normals["State"] = ["on" if lbl == on_label else "off" for lbl in labels]
+                bic_1 = gmm_1.bic(X_scaled)
+                bic_2 = gmm_2.bic(X_scaled)
+
+                try:
+                    labels_2 = gmm_2.predict(X_scaled)
+                    sil_score = silhouette_score(X_scaled, labels_2)
+                except:
+                    sil_score = -1
+
+                use_2_components = (bic_2 < bic_1) and (sil_score > 0.3)
+
+                if use_2_components:
+                    gmm = gmm_2
+                    labels = gmm.predict(X_scaled)
+                    means = scaler.inverse_transform(gmm.means_)
+                    on_label = np.argmax(means[:, 1])
+                    df_normals["State"] = np.where(labels == on_label, "on", "off")
+
+                    quantile = 0.4
+                    threshold_energy = 2 * df_normals.loc[df_normals["State"] == "off", "Energy"].quantile(quantile)
+
+                    # Prima regola: riassegna secondo la soglia 2x quantile
+                    df_normals["State"] = np.where(
+                        df_normals["Energy"] >= threshold_energy, "on", "off"
+                    )
+
+                    # Seconda regola: i punti on con energia < 10% max → off
+                    df_normals.loc[
+                        (df_normals["State"] == "on") & (df_normals["Energy"] < energy_cutoff),
+                        "State"
+                    ] = "off"
+
+                else:
+                    gmm = gmm_1
+                    df_normals["State"] = "on"
+
+                # Prepara i dati per il plot
                 df_on = df_normals[df_normals["State"] == "on"].sort_values("Temperature")
-
                 temp_on = df_on["Temperature"].values
                 energy_on = df_on["Energy"].values
 
@@ -77,29 +122,22 @@ def calc_anm_prob(case_study: str, norm_method):
 
                 # === PLOT ===
                 fig = plt.figure(figsize=(12, 5))
-                gs = gridspec.GridSpec(1, 2, width_ratios=[3, 1], wspace=0.3)
-
-                # Scatterplot a sinistra
+                gs = gridspec.GridSpec(1, 1)
                 ax0 = fig.add_subplot(gs[0])
-                ax0.scatter(temp_off, energy_off, color="gray", alpha=0.3, label="Off (GMM)")
+                ax0.scatter(temp_off, energy_off, color="gray", alpha=0.3, label="Off (GMM + Soglie)")
                 ax0.scatter(temp_on, energy_on, color="blue", alpha=0.5, label="On (fit)")
-                # ax0.scatter(temp_anomalies, energy_anomalies, color="red", alpha=0.8, label="Anomalie")
                 ax0.set_xlabel("Temperatura Esterna [°C]")
                 ax0.set_ylabel("Energia [kWh]")
                 ax0.set_title(f"{leaf} | Context {context} | Cluster {cluster} - norm_method: {norm_method}")
+
+                if use_2_components:
+                    ax0.axhline(threshold_energy, color="orange", linestyle="--", linewidth=1,
+                                label="Soglia 2x 40° percentile")
+                    ax0.axhline(energy_cutoff, color="blue", linestyle=":", linewidth=2, label="Soglia 10% max leaf")
+
                 ax0.legend()
                 ax0.grid(True)
 
-                # Istogramma della frequenza a destra
-                ax1 = fig.add_subplot(gs[1])
-                sns.histplot(y=df_normals["Energy"], ax=ax1)
-                ax1.set_xlabel("Frequenza")
-                ax1.set_title("Distribuzione Energia")
-                ax1.set_ylabel("")  # rimuove duplicazione asse y
-                ax1.set_xlabel("Frequenza")
-                ax1.set_title("Distribuzione Energia")
-
-                # Salva la figura
                 fig_name = f"{leaf}_ctx{context}_cl{cluster}.png".replace(" ", "_")
                 output_folder_viz_leaf = os.path.join(output_folder_viz, f"{leaf}")
                 os.makedirs(output_folder_viz_leaf, exist_ok=True)
