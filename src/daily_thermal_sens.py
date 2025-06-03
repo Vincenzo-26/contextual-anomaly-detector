@@ -1,5 +1,4 @@
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
 import json
 import numpy as np
 import pandas as pd
@@ -10,8 +9,6 @@ import warnings
 from sklearn.metrics import r2_score
 from scipy.stats import spearmanr, ConstantInputWarning
 from sklearn.linear_model import LinearRegression
-from scipy.signal import find_peaks
-from sklearn.mixture import GaussianMixture
 import matplotlib.pyplot as plt
 
 
@@ -65,42 +62,19 @@ def check_thermal_sensitivity(df_segment, norm_method: str or bool, corr_thresh=
     }
 
 
-def percentile_post_primo_picco(df, bins):
-    values = df["Energy"].dropna().values
-
-    counts, bin_edges = np.histogram(values, bins=bins)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-
-    peaks, _ = find_peaks(counts)
-    if len(peaks) == 0:
-        return 0.25
-
-    first_peak_idx = peaks[0]
-    for i in range(first_peak_idx + 1, len(counts)):
-        if counts[i] < 0.5 * counts[first_peak_idx]:  # soglia decrescita configurabile
-            threshold_value = bin_centers[i]
-            break
-    else:
-        threshold_value = bin_centers[first_peak_idx + 1]
-    percentile = (values < threshold_value).mean()
-
-    return percentile
-
-
-def find_thermal_sensitivity(case_study: str, ruptures_penalty: int, filter_method: any, norm_method_for_check: str):
+def find_thermal_sensitivity(case_study: str, ruptures_penalty: int, norm_method_for_check: str):
     """
     method (any) 'GMM' oppure 'peak, ' oppure '(quantile, 0.25)'
     """
     def color_text(text, color):
         color_codes = {"red": "\033[91m", "green": "\033[92m", "reset": "\033[0m"}
         return f"{color_codes[color]}{text}{color_codes['reset']}"
-    print(f"\nMethod: {filter_method[0]}\nPenalty: {ruptures_penalty}\nNorm method form thermal sensitivity: {norm_method_for_check}\n")
+    print(f"\nPenalty: {ruptures_penalty}\nNorm method form thermal sensitivity: {norm_method_for_check}\n")
     with open(os.path.join(PROJECT_ROOT, "data", case_study, f"config.json"), "r") as f:
         config = json.load(f)
 
     output_folder = os.path.join(PROJECT_ROOT, "results", case_study, "prova", "daily_thermal_sensitivity")
-    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "daily_thermal_sensitivity",
-                                     f"{filter_method[0]}", f"pen{ruptures_penalty}")
+    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "daily_thermal_sensitivity", f"pen{ruptures_penalty}")
     os.makedirs(output_folder, exist_ok=True)
     os.makedirs(output_folder_viz, exist_ok=True)
 
@@ -120,38 +94,11 @@ def find_thermal_sensitivity(case_study: str, ruptures_penalty: int, filter_meth
 
         # === FILTRAGGIO ===
         df = df[df.index.weekday < 5]
+        energia_max = df["Energy"].max()
+        threshold = energia_max * 0.10
 
-        if filter_method == "peak":
-            percentile_dynamic = percentile_post_primo_picco(df, 100)
-            threshold = df["Energy"].quantile(percentile_dynamic)
-            df["Mode"] = np.where(df["Energy"] > threshold, "on", "off")
-            df = df[df["Mode"] == "on"]
-
-        elif filter_method == "GMM":
-            values = df["Energy"].dropna().values.reshape(-1, 1)
-            gmm = GaussianMixture(n_components=2, random_state=0).fit(values)
-            labels = gmm.predict(values)
-            low_component = np.argmin(gmm.means_.flatten())
-            df["Mode"] = "off"
-            df.loc[df["Energy"].dropna().index[labels != low_component], "Mode"] = "on"
-            df = df[df["Mode"] == "on"]
-
-        elif filter_method == "soglia":
-            energia_max = df["Energy"].max()
-            threshold = energia_max * 0.10
-
-            df["Mode"] = np.where(df["Energy"] > threshold, "on", "off")
-            df = df[df["Mode"] == "on"]
-
-            # Escludiamo 'off' e 'weekend' dall'analisi
-            df = df[df["Mode"] == "on"]
-        elif isinstance(filter_method, tuple) and filter_method[0] == "quantile":
-            q = filter_method[1]
-            threshold = df["Energy"].quantile(q)
-            df["Mode"] = np.where(df["Energy"] > threshold, "on", "off")
-            df = df[df["Mode"] == "on"]
-        else:
-            raise ValueError("Metodo di filtraggio non riconosciuto.")
+        df["Mode"] = np.where(df["Energy"] > threshold, "on", "off")
+        df = df[df["Mode"] == "on"]
 
 
         # === CHANGE POINT E THERMAL SENSITIVITY ===
@@ -213,7 +160,7 @@ def find_thermal_sensitivity(case_study: str, ruptures_penalty: int, filter_meth
         ax.scatter(weekday_df[weekday_df["Mode"] == "off"]["Temperature"],
                    weekday_df[weekday_df["Mode"] == "off"]["Energy"],
                    color="lightgray", label="off (weekday)")
-
+        ax.axhline(threshold, color="gray", linestyle="--", linewidth=1.2, label="Soglia ON-OFF")
         ax.scatter(weekday_df[weekday_df["Mode"] == "on"]["Temperature"],
                    weekday_df[weekday_df["Mode"] == "on"]["Energy"],
                    color="#4a90e2", label="on (weekday)")
@@ -222,10 +169,9 @@ def find_thermal_sensitivity(case_study: str, ruptures_penalty: int, filter_meth
             t_cp = df.iloc[cp]["Temperature"]
             ax.axvline(t_cp, color="black", linewidth=1, label="Change point" if i == 0 else None)
         # === FILL DINAMICO ===
-        # Estremi dei segmenti
-        temp_bounds = [df.iloc[0]["Temperature"]]  # inizio
-        temp_bounds += [df.iloc[cp]["Temperature"] for cp in change_points]  # change points
-        temp_bounds += [df.iloc[-1]["Temperature"]]  # fine
+        temp_bounds = [df.iloc[0]["Temperature"]]
+        temp_bounds += [df.iloc[cp]["Temperature"] for cp in change_points]
+        temp_bounds += [df.iloc[-1]["Temperature"]]
         for i in range(len(temp_bounds) - 1):
             t_start = temp_bounds[i]
             t_end = temp_bounds[i + 1]
@@ -243,20 +189,17 @@ def find_thermal_sensitivity(case_study: str, ruptures_penalty: int, filter_meth
             x_fit = np.linspace(x.min(), x.max(), 100).reshape(-1, 1)
             y_fit = model.predict(x_fit)
             ax.plot(x_fit, y_fit, color="black", linestyle="--", linewidth=1.5, alpha=0.8)
-        # Etichette e salvataggio
         ax.set_xlabel("Mean temperature [°C]")
         ax.set_ylabel("Daily energy [kWh]")
-        ax.set_title(f"{leaf} - algo:{algo_model} - {filter_method} - penalty: {ruptures_penalty}")
+        ax.set_title(f"{leaf} - algo:{algo_model} - penalty: {ruptures_penalty}")
         ax.grid(True)
         ax.legend()
         fig.tight_layout()
         plt.savefig(os.path.join(output_folder_viz, f"{leaf}.png"), dpi=300)
         plt.close()
-
     return
 
 
 if __name__ == "__main__":
-    penalty = 1000
-    find_thermal_sensitivity("Cabina", penalty, 'soglia', False)
+    find_thermal_sensitivity("Cabina", 1000, False)
     # find_thermal_sensitivity("Cabina", penalty, ('quantile',0.25), False)
