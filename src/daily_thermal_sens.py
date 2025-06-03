@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 
 
-def check_thermal_sensitivity(df_segment, norm_method: str or bool, corr_thresh=0.5, r2_thresh=0.2, slope_thresh=20):
+def check_thermal_sensitivity(df_segment, norm_method: str or bool, corr_thresh=0.3, r2_thresh=0.2, slope_thresh=20):
     """
     Verifica se un segmento è termicamente sensibile usando correlazione, pendenza e R².
 
@@ -136,6 +136,15 @@ def find_thermal_sensitivity(case_study: str, ruptures_penalty: int, filter_meth
             df.loc[df["Energy"].dropna().index[labels != low_component], "Mode"] = "on"
             df = df[df["Mode"] == "on"]
 
+        elif filter_method == "soglia":
+            energia_max = df["Energy"].max()
+            threshold = energia_max * 0.10
+
+            df["Mode"] = np.where(df["Energy"] > threshold, "on", "off")
+            df = df[df["Mode"] == "on"]
+
+            # Escludiamo 'off' e 'weekend' dall'analisi
+            df = df[df["Mode"] == "on"]
         elif isinstance(filter_method, tuple) and filter_method[0] == "quantile":
             q = filter_method[1]
             threshold = df["Energy"].quantile(q)
@@ -249,5 +258,5 @@ def find_thermal_sensitivity(case_study: str, ruptures_penalty: int, filter_meth
 
 if __name__ == "__main__":
     penalty = 1000
-    find_thermal_sensitivity("Cabina", penalty, 'peak', False)
+    find_thermal_sensitivity("Cabina", penalty, 'soglia', False)
     # find_thermal_sensitivity("Cabina", penalty, ('quantile',0.25), False)
