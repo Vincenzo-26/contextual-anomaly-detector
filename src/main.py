@@ -6,7 +6,8 @@ from prepare_case_study_data import run_data
 from bayesian_network import run_BN
 from calc_energy_anm import run_soft_evd_LR
 from utils import *
-from calc_thermal_anm import run_change_point
+from calc_thermal_anm_prob import calc_anm_prob
+from calc_daily_thermal_sens import find_thermal_sens
 from calc_soft_evidence import combine_soft_evidence
 
 
@@ -31,10 +32,11 @@ run_groups_and_tw(case_study)
 run_soft_evd_LR(case_study, 50, 0.6, 0.8)
 
 # Creazione thermal evidences
-run_change_point(case_study, penalty=100, bic_threshold= 0.2, norm_for_check_term_sens = False)
+find_thermal_sens("Cabina", 1000, False)
+calc_anm_prob("Cabina", 0.05)
 
 # Combinazione delle energy evidences e thermal evidences
-combine_soft_evidence(case_study, 5)
+combine_soft_evidence(case_study)
 
 # Creazione rete bayesiana e inferenza
 inference_results = run_BN(case_study)

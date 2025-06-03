@@ -10,13 +10,33 @@ from src.utils import get_nodes_by_level
 from scipy.stats import norm
 import matplotlib.colors as mcolors
 
+
 def calc_anm_prob(case_study: str, soglia_en_max: float):
+    """
+    Calcola la probabilità di anomalia energetica per ciascun subload, in base ai residui rispetto a segmenti interpolati.
+
+    L'analisi prevede:
+        - Lettura della segmentazione termica giornaliera per ciascun sottocarico (se presente).
+        - Estrazione dei dati normali e anomali da `run_energy_temp`.
+        - Filtraggio rispetto a una soglia (percentuale del massimo nei dati normali).
+        - Interpolazione per segmenti su profili ON e weekday normal.
+        - Calcolo dei residui e della probabilità di anomalia (funzione gaussiana se il residuo è positivo).
+
+    Args:
+        - case_study (str): Nome del caso studio.
+        - soglia_en_max (float): Percentuale (es. 0.10) del consuno massimo per quella combinazione di
+          context-cluster-subload usata come soglia ON/OFF.
+
+    Returns:
+        None.
+    """
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json")) as f:
         config = json.load(f)
 
-    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "ctx_thermal_sens")
+    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity", "ctx_thermal_sens")
     os.makedirs(output_folder_viz, exist_ok=True)
-    output_df = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity")
+    output_df = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "ctx_thermal_sens")
+    os.makedirs(output_df, exist_ok=True)
 
     context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
     groups = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv"), parse_dates=["timestamp"])
@@ -24,7 +44,7 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
     levels = get_nodes_by_level(config["Load Tree"])
 
     for leaf in levels[0]:
-        df_sens_path = os.path.join(PROJECT_ROOT, "results", case_study, "prova", "daily_thermal_sensitivity", f"segs_{leaf}.csv")
+        df_sens_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "daily_thermal_sens", f"segs_{leaf}.csv")
         df_sens = pd.read_csv(df_sens_path, index_col=0)
         if not df_sens["Thermal Sensitive"].any():
             continue
@@ -70,7 +90,7 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                     print("OFF")
                     continue
 
-                # Change point detection
+                # === CHANGE POINT DETECTION ===
                 signal = df_on[["Energy"]].values
                 algo = rpt.Binseg(model="l2").fit(signal)
                 for n_bkps in [3, 2, 1]:
@@ -84,7 +104,7 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                     except rpt.exceptions.BadSegmentationParameters:
                         continue
 
-                # Segmenti e interpolazione
+                # === SEGMENTI E INTERPOLAZIONE ===
                 segments = []
                 for i in range(len(change_points)):
                     start = 0 if i == 0 else change_points[i - 1]
@@ -95,7 +115,7 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                     Tmin, Tmax = seg_x.min(), seg_x.max()
                     segments.append((np.poly1d(coeffs), Tmin, Tmax))
 
-                # Calcolo residui solo per normal ON
+                # === CALCOLO RESIDUI (solo per i dati ON) ===
                 residui_normal = []
                 for model, Tmin, Tmax in segments:
                     mask = (df_on["Temperature"] >= Tmin) & (df_on["Temperature"] <= Tmax)
@@ -113,7 +133,6 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                         return np.nan, np.nan
                     T = row["Temperature"]
                     E = row["Energy"]
-                    # Trova segmento
                     for model, Tmin, Tmax in segments:
                         if Tmin <= T <= Tmax:
                             y_pred = model(T)
@@ -141,7 +160,7 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                 df_all["Cluster"] = cluster
                 all_residuals.append(df_all)
 
-                # Plot
+                # === PLOT ===
                 output_leaf_folder = os.path.join(output_folder_viz, leaf)
                 os.makedirs(output_leaf_folder, exist_ok=True)
                 fig_path = os.path.join(output_leaf_folder, f"{leaf}_ctx{context}_cl{cluster}.png")
@@ -149,15 +168,12 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                 fig, axs = plt.subplots(1, 2, figsize=(14, 5), gridspec_kw={'width_ratios': [2, 1]})
                 ax = axs[0]
 
-                # Mappa blu → rosso
                 cmap = plt.get_cmap("coolwarm")
                 norm_color = mcolors.Normalize(vmin=0, vmax=1)
 
-                # Punti OFF sempre grigi
                 df_off = df_all[df_all["Status"] == "OFF"]
                 ax.scatter(df_off["Temperature"], df_off["Energy"], color="gray", alpha=0.3, label="OFF", marker='o')
 
-                # Punti ON normal (cerchi)
                 df_on_norm = df_all[(df_all["Status"] == "ON") & (df_all["anomalous"] == False)]
                 sc1 = ax.scatter(
                     df_on_norm["Temperature"], df_on_norm["Energy"],
@@ -165,7 +181,6 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                     alpha=0.8, label="ON", marker='o'
                 )
 
-                # Punti ON anomalous (triangoli)
                 df_on_anm = df_all[(df_all["Status"] == "ON") & (df_all["anomalous"] == True)]
                 sc2 = ax.scatter(
                     df_on_anm["Temperature"], df_on_anm["Energy"],
@@ -173,10 +188,8 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
                     alpha=0.8, label="ON Anomalous", marker='^'
                 )
 
-                # Linea soglia
                 ax.axhline(energy_cutoff, color="orange", linewidth=1, linestyle=":", label="Soglia ON/OFF")
 
-                # Aggiungi colorbar
                 cb = fig.colorbar(sc2, ax=ax)
                 cb.set_label("Prob. Anomalia")
 
@@ -218,5 +231,7 @@ def calc_anm_prob(case_study: str, soglia_en_max: float):
 
         df_concat = pd.concat(all_residuals, ignore_index=True)
         df_concat.to_csv(os.path.join(output_df, f"{leaf}.csv"), index=False)
+
+
 if __name__ == "__main__":
     calc_anm_prob("Cabina", 0.05)

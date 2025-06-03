@@ -192,7 +192,6 @@ def predict_profile(case_study: str,
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
-    # Prepara le feature
     feature_data = []
     for col in feature_cols:
         if col == "temp_profile":
