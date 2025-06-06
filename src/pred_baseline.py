@@ -1,12 +1,12 @@
+from xgboost import XGBRegressor
+from sklearn.model_selection import cross_val_score, KFold
+from sklearn.metrics import mean_absolute_percentage_error
 from src.utils import *
 from settings import PROJECT_ROOT
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset, random_split
-from sklearn.preprocessing import StandardScaler
-import numpy as np
 import pandas as pd
-import math
+import matplotlib.pyplot as plt
+from scipy.stats import normaltest
+
 
 def run_dataset(case_study: str):
     """
@@ -14,7 +14,7 @@ def run_dataset(case_study: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
-    output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "ANN")
+    output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost")
     os.makedirs(output_dir, exist_ok=True)
 
     levels = get_nodes_by_level(config["Load Tree"])
@@ -26,215 +26,233 @@ def run_dataset(case_study: str):
     context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
     cluster_cols = [col for col in groups.columns if col.startswith("Cluster_")]
 
-    all_normals = []
+    df_all = []
+
+    soglia_en_max = 0.05
 
     for leaf in first_level:
-        print(f"{leaf}...", end="")
+        print(f"{leaf}...   ", end="")
+
+        E_max_leaf = 0
         for context in context_ids:
             for cluster_col in cluster_cols:
                 cluster = int(cluster_col.split("_")[-1])
-                df_normal = run_profile_power_temp(case_study, leaf, context, cluster)[0]
-                all_normals.append(df_normal)
-        print(f"    ok")
-    print("\n")
-    df = pd.concat(all_normals, ignore_index=False)
-    df.to_csv(os.path.join(output_dir, "df_ANN.csv"))
-    return df
-
-class PowerProfileDataset(Dataset):
-    def __init__(self, df, feature_cols):
-        self.df = df
-        self.feature_cols = feature_cols
-        feature_data = []
-        for col in feature_cols:
-            if df[col].apply(lambda x: isinstance(x, list)).all():
-                expanded = pd.DataFrame(df[col].tolist(), index=df.index)
-                feature_data.append(expanded)
-            else:
-                feature_data.append(df[[col]])
-        features_df = pd.concat(feature_data, axis=1)
-        self.scaler = StandardScaler()
-        self.features = self.scaler.fit_transform(features_df.values).astype(np.float32)
-        self.targets = np.array(df["power_profile"].tolist(), dtype=np.float32)
-
-    def __len__(self):
-        return len(self.features)
-
-    def __getitem__(self, idx):
-        return torch.tensor(self.features[idx]), torch.tensor(self.targets[idx])
-
-class PowerNet(nn.Module):
-    def __init__(self, input_size, output_size):
-        super(PowerNet, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_size, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
-            nn.Linear(64, output_size)
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-def run_ANN(case_study: str):
-    df_path = os.path.join(PROJECT_ROOT, "results", case_study, "ANN", "df_ANN.csv")
-    if not os.path.exists(df_path):
-        print("\nCreating dataset for ANN training...\n")
-        run_dataset(case_study)
-    else:
-        print("\nANN training dataset already exists.\n")
-
-    df = pd.read_csv(df_path, index_col=0, parse_dates=True)
-    df["power_profile"] = df["power_profile"].apply(eval)
-    df["temp_profile"] = df["temp_profile"].apply(eval)
-
-
-
-    context_ids = df["Context"].unique()
-    base_model_dir = os.path.join(PROJECT_ROOT, "results", case_study, "ANN", "Ann_models")
-    os.makedirs(base_model_dir, exist_ok=True)
-
-    for thermal_sensitive in [True, False]:
-        model_type = "ts" if thermal_sensitive else "nts"
-        model_dir = os.path.join(base_model_dir, model_type)
-        os.makedirs(model_dir, exist_ok=True)
+                df_normals, _ = run_energy_temp(case_study, leaf, context, cluster)
+                if df_normals is not None and "Energy" in df_normals.columns:
+                    E_max_leaf = max(E_max_leaf, df_normals["Energy"].max(skipna=True))
+        energy_cutoff = soglia_en_max * E_max_leaf
 
         for context in context_ids:
-            print(f"Model {model_type.upper()} for context {context}...", end="")
+            for cluster_col in cluster_cols:
+                cluster = int(cluster_col.split("_")[-1])
+                df_normal, df_anomalous = run_energy_temp(case_study, leaf, context, cluster)
 
-            df_context = df[df["Context"] == context].copy()
+                df_normal["anm"] = False
+                if df_anomalous is not None and not df_anomalous.empty:
+                    df_anomalous["anm"] = True
+                    df_all_ctx_cl = pd.concat([df_normal, df_anomalous])
+                else:
+                    df_all_ctx_cl = df_normal
 
-            if thermal_sensitive:
-                df_model = df_context.copy()
-                feature_cols = [col for col in df_model.columns if col != "power_profile"]
-            else:
-                df_model = df_context.drop(columns=["temp_profile", "Mean_Temp"])
-                feature_cols = [
-                    col for col in df_model.columns
-                    if col != "power_profile" and np.issubdtype(df_model[col].dtype, np.number)
-                ]
+                df_all_ctx_cl["Status"] = df_all_ctx_cl["Energy"] >= energy_cutoff
+                df_all.append(df_all_ctx_cl)
 
-            dataset = PowerProfileDataset(df_model, feature_cols)
-            train_size = int(0.80 * len(dataset))
-            test_size = len(dataset) - train_size
-            train_ds, test_ds = random_split(dataset, [train_size, test_size])
-            train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
-            test_loader = DataLoader(test_ds, batch_size=32, shuffle=False)
+        print(f"ok")
+    df_all = pd.concat(df_all, ignore_index=False)
 
-            model = PowerNet(input_size=len(dataset[0][0]), output_size=len(dataset[0][1]))
-            criterion = nn.MSELoss()
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    df_all = pd.get_dummies(df_all, columns=["Subload"], prefix="", prefix_sep="", drop_first=False)
+    feature_columns = df_all.drop(columns=["Energy", "anm"]).columns.tolist()
+    with open(os.path.join(output_dir, "feature_columns.json"), "w") as f:
+        json.dump(feature_columns, f)
 
-            for epoch in range(50):
-                model.train()
-                for X_batch, y_batch in train_loader:
-                    optimizer.zero_grad()
-                    loss = criterion(model(X_batch), y_batch)
-                    loss.backward()
-                    optimizer.step()
-
-            model.eval()
-            test_loss = 0
-            with torch.no_grad():
-                for X_batch, y_batch in test_loader:
-                    preds = model(X_batch)
-                    test_loss += criterion(preds, y_batch).item() * X_batch.size(0)
-                    rmse = math.sqrt(test_loss / len(test_loader.dataset))
-            print(f" Test RMSE: {rmse:.4f}")
-
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'input_size': len(dataset[0][0]),
-                'output_size': len(dataset[0][1]),
-                'scaler': dataset.scaler,
-                'feature_cols': feature_cols
-            }, os.path.join(model_dir, f"model_ctx_{context}.pth"))
+    print("\n")
+    df_all.to_csv(os.path.join(output_dir, "df_train.csv"))
+    return df_all
 
 
-def predict_profile(case_study: str,
-                    thermal_sensitive: bool,
-                    context: int,
-                    cluster: int,
-                    subload_name: str,
-                    weekday: int,
-                    temp_profile: list = None,
-                    mean_temp: float = None):
-    """
-    Predice il profilo di potenza in base alle feature fornite.
-    """
-    results_path = os.path.join(PROJECT_ROOT, "results", case_study)
-    time_windows = pd.read_csv(os.path.join(results_path, "time_windows.csv"))
-    print(f"\nContext {context} ->   predicting {time_windows['observations'][context-1]} timestep long profile "
-          f"[{time_windows['from'][context-1]} - {time_windows['to'][context-1]})...\n")
-    model_type = "ts" if thermal_sensitive else "nts"
-    model_path = os.path.join(PROJECT_ROOT, "results", case_study, "ANN", "Ann_models", model_type, f"model_ctx_{context}.pth")
+def run_model(case_study: str):
+    output_path = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost")
+    os.makedirs(output_path, exist_ok=True)
 
-    if not os.path.exists(model_path):
-        print("Creating ANN models...")
-        run_ANN(case_study)
-    else:
-        print("ANN model already exists \n")
+    context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
+    df_train_path = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost", "df_train.csv")
+    if not os.path.exists(df_train_path):
+        run_dataset(case_study)
+    df_train_all = pd.read_csv(os.path.join(df_train_path), parse_dates=["Date"])
+    df_train_all.set_index('Date', inplace=True)
+    df_train_all = df_train_all[df_train_all['Energy'] > 0]
 
-    with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    results = []
+
+    for context in context_ids:
+        # train solo su dati normal del context
+        df_train_ctx = df_train_all[(df_train_all['Context'] == context) & (df_train_all['anm'] == False)].copy()
+
+        y = df_train_ctx["Energy"].values
+        X = df_train_ctx.drop(columns=["Energy", "anm"])
+        X["Status"] = X["Status"].astype(bool)
+
+        model = XGBRegressor(objective="reg:squarederror", n_estimators=100, random_state=42)
+
+        mae_scores = -cross_val_score(model, X, y, cv=kf, scoring="neg_mean_absolute_error")
+        rmse_scores = np.sqrt(-cross_val_score(model, X, y, cv=kf, scoring="neg_mean_squared_error"))
+        r2_scores = cross_val_score(model, X, y, cv=kf, scoring="r2")
+
+        y_preds_all = np.zeros_like(y)
+        for train_idx, test_idx in kf.split(X):
+            model.fit(X.iloc[train_idx], y[train_idx])
+            y_preds_all[test_idx] = model.predict(X.iloc[test_idx])
+
+        mape = mean_absolute_percentage_error(y, y_preds_all) * 100  # in %
+
+        results.append({
+            "Context": context,
+            "MAE [kWh]": np.mean(mae_scores),
+            "RMSE [kWh]": np.mean(rmse_scores),
+            "R² [-]": np.mean(r2_scores),
+            "MAPE [%]": mape
+        })
+
+        print(f"[Context {context}]  MAE: {np.mean(mae_scores):.2f} kWh  "
+              f"RMSE: {np.mean(rmse_scores):.2f} kWh  "
+              f"R²: {np.mean(r2_scores):.2f}  "
+              f"MAPE: {mape:.2f}%")
+
+        model.fit(X, y)
+        output_model = os.path.join(output_path, "models")
+        os.makedirs(output_model, exist_ok=True)
+        model.save_model(os.path.join(output_model, f"model_ctx{context}.json"))
+
+    df_results = pd.DataFrame(results)
+    output_file = os.path.join(output_path, "model_results.csv")
+    df_results.to_csv(output_file, index=False)
+    print(f"\n✅ Modelli salvati in: {output_path}")
+
+
+def calc_anm_prob(case_study: str):
+    with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json")) as f:
         config = json.load(f)
-    first_level = get_nodes_by_level(config["Load Tree"])[0]
-    subload_map = map_subload(first_level, from_type="subload", to_type="number")
-    subload = subload_map[subload_name]
 
-    checkpoint = torch.load(model_path)
-    input_size = checkpoint['input_size']
-    output_size = checkpoint['output_size']
-    scaler = checkpoint['scaler']
-    feature_cols = checkpoint['feature_cols']
+    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity", "ctx_thermal_sens_xgboost")
+    os.makedirs(output_folder_viz, exist_ok=True)
+    output_folder_df = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "ctx_thermal_sens_xgboost")
+    os.makedirs(output_folder_df, exist_ok=True)
 
-    model = PowerNet(input_size=input_size, output_size=output_size)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
+    context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
+    groups = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv"), parse_dates=["timestamp"])
+    cluster_cols = [col for col in groups.columns if col.startswith("Cluster_")]
+    levels = get_nodes_by_level(config["Load Tree"])
 
-    feature_data = []
-    for col in feature_cols:
-        if col == "temp_profile":
-            if not thermal_sensitive:
-                continue
-            if temp_profile is None:
-                raise ValueError("temp_profile richiesto per thermal_sensitive=True")
-            feature_data.append(temp_profile)
-        elif col == "Mean_Temp":
-            if not thermal_sensitive:
-                continue
-            if mean_temp is None:
-                raise ValueError("mean_temp richiesto per thermal_sensitive=True")
-            feature_data.append([mean_temp])
-        elif col == "weekday":
-            feature_data.append([weekday])
-        elif col == "Subload":
-            feature_data.append([subload])
-        elif col == "Context":
-            feature_data.append([context])
-        elif col == "Cluster":
-            feature_data.append([cluster])
-        else:
-            raise ValueError(f"Colonna non gestita: {col}")
+    df_path = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost", "df_train.csv")
+    df_all = pd.read_csv(os.path.join(df_path), parse_dates=["Date"])
+    df_all.set_index('Date', inplace=True)
+    # df_all = df_all[df_all['Energy'] > 0]
 
-    x = np.concatenate(feature_data).reshape(1, -1)
-    x_scaled = scaler.transform(x).astype(np.float32)
-    x_tensor = torch.tensor(x_scaled)
+    for leaf in levels[0]:
+        df_leaf_all = []
+        df_sens_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "daily_thermal_sens", f"segs_{leaf}.csv")
+        df_sens = pd.read_csv(df_sens_path, index_col=0)
+        if not df_sens["Thermal Sensitive"].any():
+            continue
 
-    with torch.no_grad():
-        y_pred = model(x_tensor).numpy().flatten()
-    print(f"Power profile predicion [W]:\n{y_pred}")
-    return y_pred
+        print(f"\033[91m{leaf}\033[0m")
 
+        for context in context_ids:
+            for cluster_col in cluster_cols:
+                cluster = int(cluster_col.split("_")[-1])
+                print(f"[Ctx {context} | Clst {cluster}]...    ", end="")
+
+                df = df_all[(df_all['Context'] == context) & (df_all['Cluster'] == cluster) & (df_all[leaf])].copy()
+
+                if df is None or df.empty:
+                    print(f"    ⚠️ Dataframe vuoto")
+                df = df.sort_values("Mean_Temp")
+
+                features = df.drop(columns=["Energy", "anm"])
+                with open(os.path.join(PROJECT_ROOT, "results", case_study, "XGboost", "feature_columns.json")) as f:
+                    training_columns = json.load(f)
+
+                if not all(col in features.columns for col in training_columns):
+                    missing = [col for col in training_columns if col not in features.columns]
+                    print(f"⚠️ Skipped due to missing columns: {missing}")
+                    continue
+
+                features = features[training_columns]
 
 
+                model_path = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost", "models", f"model_ctx{context}.json")
+                model = XGBRegressor()
+                model.load_model(model_path)
+
+                df["y_pred"] = model.predict(features)
+                df["residual"] = df["Energy"] - df["y_pred"]
+
+                residuals_normal = df.loc[df["anm"] == False, "residual"]
+                if len(residuals_normal) >= 8:  # normaltest richiede almeno 8 dati
+                    stat, p_value = normaltest(residuals_normal)
+                    is_normal = p_value > 0.05
+                    emoji = "✅" if is_normal else "❌"
+                else:
+                    emoji = "⚠️ dati non sufficienti per la valutazione"
+                # print(f"Residual normal distribution {emoji}")
+
+                # calcolo della probabilità di anomalia
+                sigma = df.loc[df["anm"] == False, "residual"].std()
+                theta = 6.5
+                df["anm_prob"] = 1 - np.exp(- (df["residual"] ** 2) / (2 * theta * sigma ** 2))
+                # sovrascrivere a 0% per residui negativi
+                df.loc[df["residual"] < 0, "anm_prob"] = 0
+                print(f"Residual normal distribution {emoji}, sigma: {sigma}")
+
+                df_leaf_all.append(df)
+
+                plt.figure(figsize=(10, 6))
+                for status in [False, True]:
+                    for is_anomalous in [False, True]:
+                        mask = (df["Status"] == status) & (df["anm"] == is_anomalous)
+                        if mask.sum() == 0:
+                            continue
+
+                        marker = "^" if is_anomalous else "o"
+                        label = f"{'ON' if status else 'OFF'} {'anomalous' if is_anomalous else 'normal'}"
+                        cmap = plt.colormaps["Greys"] if not status else plt.colormaps["coolwarm"]
+                        norm_anm_prob = df.loc[mask, "anm_prob"]
+                        colors = cmap(norm_anm_prob)
+
+                        plt.scatter(
+                            df.loc[mask, "Mean_Temp"],
+                            df.loc[mask, "Energy"],
+                            c=colors,
+                            marker=marker,
+                            edgecolor="black",
+                            label=label,
+                            alpha=0.8
+                        )
+                plt.scatter(
+                    df["Mean_Temp"],
+                    df["y_pred"],
+                    c='black', marker='x', label='Prediction (model)', alpha=0.6, zorder=1
+                )
+                plt.xlabel("Temperatura [°C]")
+                plt.ylabel("Energia [kWh]")
+                plt.title(f"{leaf} - Context {context} - Cluster {cluster}")
+                plt.legend()
+                plt.grid(True)
+                plt.tight_layout()
+
+                filename = f"{leaf}_ctx{context}_cl{cluster}.png"
+                filepath_leaf = os.path.join(output_folder_viz, f"{leaf}")
+                os.makedirs(filepath_leaf, exist_ok=True)
+                filepath = os.path.join(filepath_leaf, filename)
+                plt.savefig(filepath)
+                plt.close()
+        df_leaf_concat = pd.concat(df_leaf_all)
+        output_csv_path = os.path.join(output_folder_df, f"{leaf}.csv")
+        df_leaf_concat.to_csv(output_csv_path, index=True)
+        print("\n")
 
 if __name__ == "__main__":
-    predict_profile(
-        case_study="Cabina",
-        thermal_sensitive=False,
-        context=1,
-        cluster=1,
-        subload_name="Rooftop 1",
-        weekday=0
-    )
+    # run_dataset("Cabina")
+    # run_model("Cabina")
+    calc_anm_prob("Cabina")

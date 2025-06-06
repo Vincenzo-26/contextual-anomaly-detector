@@ -198,93 +198,8 @@ def run_energy_in_tw(case_study: str, sottocarico: str):
 
     return pd.DataFrame(results)
 
+
 def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: int):
-    """
-    Estrae i dati energetici e di temperatura esterna per una specifica combinazione
-    di sottocarico - context - cluster, restituendo due DataFrame per giorni normali e anomali.
-
-    Args:
-        case_study : (str) Nome dello studio di caso (cartella dei dati).
-        sottocarico : (str) Nome del nodo foglia (sottocarico) del grafo dei carichi.
-        context : (int) ID del contesto temporale (fascia oraria specifica).
-        cluster : (int) ID del cluster da analizzare.
-
-    Returns:
-        df_normals : (pd.DataFrame) DataFrame contenente, per ogni giorno normal (index), l'energia aggregata nel context
-            e la realtiva temperatura media. Colonne: ["Energy", "Temperature"].
-
-        df_anomalies : (pd.DataFrame) DataFrame con gli stessi campi di `df_normals` ma riferito a giorni anomali
-            secondo la tabella delle anomalie.
-    """
-    with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
-        config = json.load(f)
-
-    results_path = os.path.join(PROJECT_ROOT, "results", case_study)
-    anomaly_path = os.path.join(results_path, "anomaly_table")
-
-    df_leaf = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{sottocarico}.csv"), index_col=0, parse_dates=True)
-    temp_file = config["Outside Temperature"]
-    df_temp = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{temp_file}.csv"), index_col=0, parse_dates=True)
-    df_temp.columns = ["Temperatura Esterna"]
-    df_temp = df_temp.interpolate(method="time").bfill().ffill()
-    df_leaf.columns = ["Power"]
-    df_anm = pd.read_csv(os.path.join(anomaly_path, f"anomaly_table_{sottocarico}.csv"), index_col=0, parse_dates=True)
-
-    groups = pd.read_csv(os.path.join(results_path, "groups.csv"), index_col=0, parse_dates=True)
-    time_windows = pd.read_csv(os.path.join(results_path, "time_windows.csv"))
-    time_windows['to'] = time_windows['to'].replace('24:00', '23:59')
-
-    cluster_col = f"Cluster_{cluster}"
-    cluster_series = groups[cluster_col]
-
-    if cluster_series.dtype == bool or set(cluster_series.unique()) <= {0, 1}:
-        selected_dates = cluster_series[cluster_series == True].index.date
-    else:
-        selected_dates = cluster_series[cluster_series == cluster].index.date
-
-    df_leaf = df_leaf[pd.Series(df_leaf.index.date).isin(selected_dates).values]
-
-    selected_window = time_windows[time_windows["id"] == context].iloc[0]
-    from_hour = pd.to_datetime(selected_window['from'], format='%H:%M').time()
-    to_hour = pd.to_datetime(selected_window['to'], format='%H:%M').time()
-
-    def is_in_time_window(ts):
-        t = ts.time()
-        return (from_hour <= t < to_hour)
-
-    df_leaf = df_leaf[df_leaf.index.map(is_in_time_window)]
-    df_merged = df_leaf.join(df_temp, how="inner")
-
-    if df_merged.empty:
-        print("Nessun dato trovato per il cluster e la fascia oraria selezionati.")
-        return
-
-    df_grouped = df_merged.groupby(df_merged.index.date).agg(
-        Energy=("Power", lambda x: x.sum() * 0.25 / 1000),
-        Temperature=("Temperatura Esterna", "mean")
-    )
-
-    anomalous_dates = df_anm.index.date
-    df_anomalies = df_grouped[df_grouped.index.isin(anomalous_dates)]
-    df_normals = df_grouped[~df_grouped.index.isin(anomalous_dates)]
-
-    return df_normals, df_anomalies
-
-def map_subload(subload_list: list, from_type: str, to_type: str):
-    if from_type == to_type:
-        raise ValueError("from_type e to_type devono essere diversi.")
-    unique_subloads = sorted(set(subload_list))
-    subload_to_num = {name: idx for idx, name in enumerate(unique_subloads)}
-    num_to_subload = {idx: name for name, idx in subload_to_num.items()}
-
-    if from_type == "subload" and to_type == "number":
-        return subload_to_num
-    elif from_type == "number" and to_type == "subload":
-        return num_to_subload
-    else:
-        raise ValueError("from_type e to_type devono essere 'subload' o 'number'.")
-
-def run_profile_power_temp(case_study: str, sottocarico: str, context: int, cluster: int):
     """
     per ogni giorno appartenente al cluster estrae i profili di potenza del sottocarico e di temperatura nella
     time window relativa al context.
@@ -296,7 +211,7 @@ def run_profile_power_temp(case_study: str, sottocarico: str, context: int, clus
       - il profilo di temperatura esterna corrispondente;
       - la media della temperatura;
       - il giorno della settimana (0=lunedì);
-      - il sottocarico identificato da un numero (per input alla ANN);
+      - il sottocarico identificato da un numero (per input alla XGboost);
       - il contesto e il cluster di appartenenza.
 
     Args:
@@ -313,6 +228,7 @@ def run_profile_power_temp(case_study: str, sottocarico: str, context: int, clus
     """
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
+
     results_path = os.path.join(PROJECT_ROOT, "results", case_study)
     anomaly_path = os.path.join(results_path, "anomaly_table")
 
@@ -336,10 +252,6 @@ def run_profile_power_temp(case_study: str, sottocarico: str, context: int, clus
     from_hour = pd.to_datetime(selected_window['from'], format='%H:%M').time()
     to_hour = pd.to_datetime(selected_window['to'], format='%H:%M').time()
 
-    levels = get_nodes_by_level(config["Load Tree"])
-    first_level = levels[0]
-    subload_map = map_subload(first_level, from_type="subload", to_type="number")
-
     def is_in_window(ts):
         t = ts.time()
         return from_hour <= t < to_hour
@@ -359,11 +271,11 @@ def run_profile_power_temp(case_study: str, sottocarico: str, context: int, clus
             continue
         daily_profiles.append({
             "Date": date,
-            "power_profile": day_df["Power"].tolist(),
-            "temp_profile": day_df["Temperatura Esterna"].tolist(),
+            "Energy": day_df["Power"].sum() * 0.25 / 1000,
             "Mean_Temp": np.mean(day_df["Temperatura Esterna"]),
-            "weekday": pd.Timestamp(date).weekday(),
-            "Subload": subload_map[sottocarico],
+            "Weekday": pd.Timestamp(date).weekday(),
+            "Month": pd.Timestamp(date).month,
+            "Subload": sottocarico,
             "Context": context,
             "Cluster": cluster
         })
@@ -372,6 +284,7 @@ def run_profile_power_temp(case_study: str, sottocarico: str, context: int, clus
     anomalous_dates = df_anm.index.date
     df_anomalies = df_profiles[df_profiles.index.isin(anomalous_dates)].copy()
     df_normals = df_profiles[~df_profiles.index.isin(anomalous_dates)].copy()
+
     return df_normals, df_anomalies
 
 def get_nodes_by_level(load_tree: dict) -> list[list[str]]:

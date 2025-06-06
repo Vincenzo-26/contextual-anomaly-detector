@@ -24,15 +24,17 @@ def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
         all_case_studies.extend(case_studies_to_align_on)
 
     for cs in all_case_studies:
-        print(f"🔍 Analizzo {cs}...")
+        cs_start, cs_end = None, None
+        print(f"🔍 {cs}...", end="")
+
         config, leaf_nodes = load_config_and_leaves(cs)
         if config is None:
+            print()
             continue
 
         for leaf in leaf_nodes:
             raw_path = os.path.join(PROJECT_ROOT, "raw_data", f"{leaf}.csv")
             if not os.path.exists(raw_path):
-                print(f"⚠️ File non trovato: {raw_path}")
                 continue
 
             df = pd.read_csv(raw_path, index_col=0, parse_dates=True)
@@ -48,7 +50,6 @@ def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
             df_clean = clean_time_series(df, unit=unit)
 
             if df_clean.empty:
-                print(f"⚠️ Dataset vuoto dopo la pulizia: {leaf}")
                 continue
 
             cleaned_data[f"{cs}/{leaf}"] = df_clean
@@ -59,13 +60,23 @@ def run_data(case_study: str, case_studies_to_align_on: list[str] = None):
             if common_end is None or end < common_end:
                 common_end = end
 
+            if cs_start is None or start < cs_start:
+                cs_start = start
+            if cs_end is None or end > cs_end:
+                cs_end = end
+
+        if cs_start and cs_end:
+            print(f"     from: {cs_start} - to: {cs_end}")
+        else:
+            print()
+
     if common_start is None or common_end is None:
         print("❌ Nessun dato valido trovato.")
         return
 
     aligned_index = pd.date_range(common_start, common_end, freq="15min")
     if case_studies_to_align_on:
-        print(f"📅 Intervallo comune: {common_start} ➔ {common_end} ({len(aligned_index)} punti)")
+        print(f"📅 Common interval: {common_start} ➔ {common_end} ({len(aligned_index)} observations)\n")
 
     dfs_per_case_study = defaultdict(list)
 
