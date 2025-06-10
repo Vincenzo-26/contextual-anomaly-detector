@@ -10,11 +10,28 @@ from scipy.stats import normaltest
 
 def run_dataset(case_study: str):
     """
+    Costruisce il dataset completo per l'addestramento del modello XGBoost, aggregando dati normali e anomali
+    per ciascun contesto e cluster del primo livello del load tree.
+
+    Per ogni combinazione (leaf, context, cluster):
+      - calcola il massimo valore di energia tra i profili normali;
+      - definisce una soglia pari al 5% dell'energia massima;
+      - assegna un'etichetta booleana "Status" che indica se l'energia supera tale soglia;
+      - concatena i profili normali e anomali, marcando questi ultimi con la colonna "anm".
+
+    Infine, il dataset viene codificato con one-hot encoding sui nomi dei sottocarichi ("Subload"),
+    e viene salvato su file insieme all'elenco delle feature.
+
+    Args:
+        case_study (str): Nome del caso studio (cartella contenente dati e configurazioni).
+
+    Returns:
+        pd.DataFrame: Dataset completo con etichette di anomalia e feature per il training.
     """
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
-    output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost")
+    output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost")
     os.makedirs(output_dir, exist_ok=True)
 
     levels = get_nodes_by_level(config["Load Tree"])
@@ -71,11 +88,11 @@ def run_dataset(case_study: str):
 
 
 def run_model(case_study: str):
-    output_path = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost")
+    output_path = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost")
     os.makedirs(output_path, exist_ok=True)
 
     context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
-    df_train_path = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost", "df_train.csv")
+    df_train_path = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "df_train.csv")
     if not os.path.exists(df_train_path):
         run_dataset(case_study)
     df_train_all = pd.read_csv(os.path.join(df_train_path), parse_dates=["Date"])
@@ -134,9 +151,9 @@ def calc_anm_prob(case_study: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json")) as f:
         config = json.load(f)
 
-    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity", "ctx_thermal_sens_xgboost")
+    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity", "ctx_thermal_sens")
     os.makedirs(output_folder_viz, exist_ok=True)
-    output_folder_df = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "ctx_thermal_sens_xgboost")
+    output_folder_df = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "ctx_thermal_sens")
     os.makedirs(output_folder_df, exist_ok=True)
 
     context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
@@ -144,7 +161,7 @@ def calc_anm_prob(case_study: str):
     cluster_cols = [col for col in groups.columns if col.startswith("Cluster_")]
     levels = get_nodes_by_level(config["Load Tree"])
 
-    df_path = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost", "df_train.csv")
+    df_path = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "df_train.csv")
     df_all = pd.read_csv(os.path.join(df_path), parse_dates=["Date"])
     df_all.set_index('Date', inplace=True)
     # df_all = df_all[df_all['Energy'] > 0]
@@ -170,7 +187,7 @@ def calc_anm_prob(case_study: str):
                 df = df.sort_values("Mean_Temp")
 
                 features = df.drop(columns=["Energy", "anm"])
-                with open(os.path.join(PROJECT_ROOT, "results", case_study, "XGboost", "feature_columns.json")) as f:
+                with open(os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "feature_columns.json")) as f:
                     training_columns = json.load(f)
 
                 if not all(col in features.columns for col in training_columns):
@@ -181,7 +198,9 @@ def calc_anm_prob(case_study: str):
                 features = features[training_columns]
 
 
-                model_path = os.path.join(PROJECT_ROOT, "results", case_study, "XGboost", "models", f"model_ctx{context}.json")
+                model_path = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "models", f"model_ctx{context}.json")
+                if not os.path.exists(model_path):
+                    run_model(case_study)
                 model = XGBRegressor()
                 model.load_model(model_path)
 
@@ -203,7 +222,7 @@ def calc_anm_prob(case_study: str):
                 df["anm_prob"] = 1 - np.exp(- (df["residual"] ** 2) / (2 * theta * sigma ** 2))
                 # sovrascrivere a 0% per residui negativi
                 df.loc[df["residual"] < 0, "anm_prob"] = 0
-                print(f"Residual normal distribution {emoji}, sigma: {sigma}")
+                print(f"Residual normal distribution {emoji}")
 
                 df_leaf_all.append(df)
 

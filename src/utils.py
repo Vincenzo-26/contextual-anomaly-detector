@@ -211,7 +211,7 @@ def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: in
       - il profilo di temperatura esterna corrispondente;
       - la media della temperatura;
       - il giorno della settimana (0=lunedì);
-      - il sottocarico identificato da un numero (per input alla XGboost);
+      - il sottocarico identificato da un numero (per input alla temp_XGboost);
       - il contesto e il cluster di appartenenza.
 
     Args:
@@ -226,9 +226,6 @@ def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: in
                 ['power_profile', 'temp_profile', 'Mean_Temp', 'weekday', 'Subload', 'Context', 'Cluster']
             - df_anomalies: DataFrame con i giorni anomali e le stesse colonne sopra elencate.
     """
-    with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
-        config = json.load(f)
-
     results_path = os.path.join(PROJECT_ROOT, "results", case_study)
     anomaly_path = os.path.join(results_path, "anomaly_table")
 
@@ -284,6 +281,102 @@ def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: in
     anomalous_dates = df_anm.index.date
     df_anomalies = df_profiles[df_profiles.index.isin(anomalous_dates)].copy()
     df_normals = df_profiles[~df_profiles.index.isin(anomalous_dates)].copy()
+
+    return df_normals, df_anomalies
+
+def run_energy_temp_profile(case_study: str, sottocarico: str, context: int, cluster: int):
+    """
+    Per ogni giorno appartenente al cluster, estrae i dati quartorari di potenza e temperatura
+    nella finestra oraria del contesto e costruisce un DataFrame codificato con:
+
+      - data, mese, weekday;
+      - ora e numero del quarto d’ora (0-3);
+      - temperatura media giornaliera nella finestra (temp_mean);
+      - temperatura e potenza per ogni timestep;
+      - numero del contesto e del cluster.
+
+    I giorni vengono poi separati tra normali e anomali sulla base della tabella delle anomalie.
+
+    Args:
+        case_study (str): Nome del caso studio.
+        sottocarico (str): Nome del file CSV del sottocarico (es. 'Rooftop 1').
+        context (int): Numero del contesto.
+        cluster (int): Numero del cluster.
+
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]:
+            - df_normals: DataFrame quartorario dei giorni normali.
+            - df_anomalies: DataFrame quartorario dei giorni anomali.
+    """
+    results_path = os.path.join(PROJECT_ROOT, "results", case_study)
+    anomaly_path = os.path.join(results_path, "anomaly_table")
+
+    df_leaf = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{sottocarico}.csv"), index_col=0, parse_dates=True)
+    df_temp = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{json.load(open(os.path.join(PROJECT_ROOT, 'data', case_study, 'config.json')))['Outside Temperature']}.csv"), index_col=0, parse_dates=True)
+    df_temp.columns = ["Temperatura Esterna"]
+    df_temp = df_temp.interpolate(method="time").bfill().ffill()
+    df_leaf.columns = ["Power"]
+
+    df_anm = pd.read_csv(os.path.join(anomaly_path, f"anomaly_table_{sottocarico}.csv"), index_col=0, parse_dates=True)
+    groups = pd.read_csv(os.path.join(results_path, "groups.csv"), index_col=0, parse_dates=True)
+    time_windows = pd.read_csv(os.path.join(results_path, "time_windows.csv"))
+    time_windows['to'] = time_windows['to'].replace('24:00', '23:59')
+
+    cluster_col = f"Cluster_{cluster}"
+    cluster_series = groups[cluster_col]
+    selected_dates = cluster_series[cluster_series == cluster].index.date if cluster_series.dtype != bool else cluster_series[cluster_series].index.date
+
+    df_leaf = df_leaf[pd.Series(df_leaf.index.date).isin(selected_dates).values]
+    df_temp = df_temp[df_temp.index.normalize().isin(pd.to_datetime(selected_dates))]
+
+    selected_window = time_windows[time_windows["id"] == context].iloc[0]
+    from_hour = pd.to_datetime(selected_window['from'], format='%H:%M').time()
+    to_hour = pd.to_datetime(selected_window['to'], format='%H:%M').time()
+
+    def is_in_window(ts):
+        t = ts.time()
+        return from_hour <= t < to_hour
+
+    df_merged = df_leaf.join(df_temp, how="inner")
+    df_merged = df_merged[df_merged.index.map(is_in_window)]
+
+    if df_merged.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    records = []
+    for date in np.unique(df_merged.index.date):
+        day_mask = pd.Series(df_merged.index.date, index=df_merged.index) == date
+        day_df = df_merged[day_mask].copy()
+        if day_df.empty:
+            continue
+
+        temp_mean = day_df["Temperatura Esterna"].mean()
+        weekday = pd.Timestamp(date).weekday()
+        month = pd.Timestamp(date).month
+
+        for timestamp, row in day_df.iterrows():
+            records.append({
+                "Date": timestamp.date(),
+                "mese": month,
+                "weekday": weekday,
+                "ora": timestamp.hour,
+                "quartodora": timestamp.minute // 15,
+                "Context": context,
+                "Cluster": cluster,
+                "temp": row["Temperatura Esterna"],
+                "temp_mean": round(temp_mean, 3),
+                "Energy": row["Power"] * 0.25 / 1000
+            })
+
+    df_full = pd.DataFrame(records)
+    df_full.set_index(pd.to_datetime(df_full["Date"]), inplace=True)
+    df_full.drop(columns=["Date"], inplace=True)
+
+    anomalous_dates = df_anm.index.date
+    mask = pd.Series(df_full.index.date, index=df_full.index)
+
+    df_anomalies = df_full[mask.isin(anomalous_dates)].copy()
+    df_normals = df_full[~mask.isin(anomalous_dates)].copy()
 
     return df_normals, df_anomalies
 
