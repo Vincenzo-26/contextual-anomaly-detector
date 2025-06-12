@@ -65,7 +65,7 @@ def check_thermal_sens(df_segment, norm_method: str or bool, corr_thresh=0.3, r2
     }
 
 
-def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_check: str):
+def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_check: any):
     """
     Analizza la sensibilità termica giornaliera per ciascun subload dell'albero dei carichi.
 

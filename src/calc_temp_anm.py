@@ -93,8 +93,8 @@ def run_model(case_study: str):
 
     context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
     df_train_path = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "df_train.csv")
-    if not os.path.exists(df_train_path):
-        run_dataset(case_study)
+    # if not os.path.exists(df_train_path):
+    run_dataset(case_study)
     df_train_all = pd.read_csv(os.path.join(df_train_path), parse_dates=["Date"])
     df_train_all.set_index('Date', inplace=True)
     df_train_all = df_train_all[df_train_all['Energy'] > 0]
@@ -144,10 +144,12 @@ def run_model(case_study: str):
     df_results = pd.DataFrame(results)
     output_file = os.path.join(output_path, "model_results.csv")
     df_results.to_csv(output_file, index=False)
-    print(f"\n✅ Modelli salvati in: {output_path}")
+    print(f"\n✅ Models saved in: {output_path}\n")
+    return
 
 
-def calc_anm_prob(case_study: str):
+def calc_temp_anm_prob(case_study: str):
+    print_boxed_title("Thermal evidence calculation 📈")
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json")) as f:
         config = json.load(f)
 
@@ -166,6 +168,11 @@ def calc_anm_prob(case_study: str):
     df_all.set_index('Date', inplace=True)
     # df_all = df_all[df_all['Energy'] > 0]
 
+    model_folder_path = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "models")
+    if not os.path.exists(model_folder_path):
+        print("Creating XGboost models for each context...")
+        run_model(case_study)
+    print("Thermal probability calculation...\n")
     for leaf in levels[0]:
         df_leaf_all = []
         df_sens_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "daily_thermal_sens", f"segs_{leaf}.csv")
@@ -174,7 +181,6 @@ def calc_anm_prob(case_study: str):
             continue
 
         print(f"\033[91m{leaf}\033[0m")
-
         for context in context_ids:
             for cluster_col in cluster_cols:
                 cluster = int(cluster_col.split("_")[-1])
@@ -197,10 +203,7 @@ def calc_anm_prob(case_study: str):
 
                 features = features[training_columns]
 
-
-                model_path = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "models", f"model_ctx{context}.json")
-                if not os.path.exists(model_path):
-                    run_model(case_study)
+                model_path = os.path.join(model_folder_path, f"model_ctx{context}.json")
                 model = XGBRegressor()
                 model.load_model(model_path)
 
@@ -274,4 +277,4 @@ def calc_anm_prob(case_study: str):
 if __name__ == "__main__":
     # run_dataset("Cabina")
     # run_model("Cabina")
-    calc_anm_prob("Cabina")
+    calc_temp_anm_prob("Cabina")

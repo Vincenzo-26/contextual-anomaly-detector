@@ -312,7 +312,7 @@ def run_energy_temp_profile(case_study: str, sottocarico: str, context: int, clu
     anomaly_path = os.path.join(results_path, "anomaly_table")
 
     df_leaf = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{sottocarico}.csv"), index_col=0, parse_dates=True)
-    df_temp = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{json.load(open(os.path.join(PROJECT_ROOT, 'data', case_study, 'config.json')))['Outside Temperature']}.csv"), index_col=0, parse_dates=True)
+    df_temp = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"Temperatura Esterna.csv"), index_col=0, parse_dates=True)
     df_temp.columns = ["Temperatura Esterna"]
     df_temp = df_temp.interpolate(method="time").bfill().ffill()
     df_leaf.columns = ["Power"]
