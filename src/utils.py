@@ -369,14 +369,17 @@ def run_energy_temp_profile(case_study: str, sottocarico: str, context: int, clu
             })
 
     df_full = pd.DataFrame(records)
-    df_full.set_index(pd.to_datetime(df_full["Date"]), inplace=True)
-    df_full.drop(columns=["Date"], inplace=True)
+    df_full["Date"] = pd.to_datetime(df_full["Date"])
 
-    anomalous_dates = df_anm.index.date
-    mask = pd.Series(df_full.index.date, index=df_full.index)
+    df_full["anm"] = df_full.apply(lambda row: ((df_anm.index == row["Date"]) & (df_anm["Context"] == row["Context"])).any(), axis=1)
+    df_anomalies = df_full[df_full["anm"]].copy()
+    df_normals = df_full[~df_full["anm"]].copy()
 
-    df_anomalies = df_full[mask.isin(anomalous_dates)].copy()
-    df_normals = df_full[~mask.isin(anomalous_dates)].copy()
+    # df_anomalies.drop(columns=["anm", "Date"], inplace=True)
+    # df_normals.drop(columns=["anm", "Date"], inplace=True)
+    #
+    # df_anomalies.set_index(df_anomalies.columns[0], inplace=True)
+    # df_normals.set_index(df_normals.columns[0], inplace=True)
 
     return df_normals, df_anomalies
 

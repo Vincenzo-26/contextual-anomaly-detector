@@ -104,7 +104,7 @@ def run_model(case_study: str):
 
     for context in context_ids:
         # train solo su dati normal del context
-        df_train_ctx = df_train_all[(df_train_all['Context'] == context) & (df_train_all['anm'] == False)].copy()
+        df_train_ctx = df_train_all[(df_train_all['Context'] == context) & (df_train_all['anm'] == False)].copy()  # TODO Mantieni le anomalie
 
         y = df_train_ctx["Energy"].values
         X = df_train_ctx.drop(columns=["Energy", "anm"])

@@ -74,7 +74,7 @@ def plot_logistic_regression(case_study: str, foglia: str, context: int, cluster
                              line=dict(color='black', width=1),
                              hovertemplate='Energy: %{x:.2f} kWh<br>Anomaly Prob: %{y:.3f}<extra></extra>'))
 
-    def scatter_points_binary(x_vals, y_val, color, name):
+    def scatter_points_binary(x_vals, y_val, color, name, dates):
         probs_interp = np.interp(x_vals, x_plot, anomaly_prob) * 100
         fig.add_trace(go.Scatter(
             x=x_vals,
@@ -82,16 +82,21 @@ def plot_logistic_regression(case_study: str, foglia: str, context: int, cluster
             mode='markers',
             name=f'{name} ({len(x_vals)})',
             marker=dict(color=color, size=7, symbol='circle'),
-            hovertemplate=[
-                f'Energy: {float(x):.2f} kWh<br>Anomaly Prob: {float(p):.1f}%<extra></extra>'
-                for x, p in zip(x_vals, probs_interp)
-            ]
+            customdata=np.stack((probs_interp, dates), axis=-1),
+            hovertemplate='Energy: %{x:.2f} kWh<br>Anomaly Prob: %{customdata[0]:.1f}%<br>Date: %{customdata[1]}<extra></extra>'
         ))
-    scatter_points_binary(x_normal, 0, 'blue', 'Normal points')
+
+    scatter_points_binary(
+        x_normal, 0, 'blue', 'Normal points',
+        df_sub.loc[~y_real, "Date"].astype(str).values
+    )
 
     if len(x_anomaly) > 0:
         x_anomaly_1d = x_anomaly.flatten()
-        scatter_points_binary(x_anomaly_1d, 1, 'red', 'Anomaly points')
+        scatter_points_binary(
+            x_anomaly_1d, 1, 'red', 'Anomaly points',
+            df_sub.loc[y_real, "Date"].astype(str).values
+        )
 
     fig.update_layout(
         title=f"{foglia} | Context {context} - Cluster {cluster}  {title_suffix}",

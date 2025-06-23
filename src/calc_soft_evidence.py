@@ -27,7 +27,8 @@ def combine_soft_evidence(case_study: str):
         print(f"[{foglia}] Processing...    ", end="")
 
         df_energy = pd.read_csv(os.path.join(energy_folder_path, f"evd_{foglia}.csv"))
-        temp_path = os.path.join(temp_folder_path, f"{foglia}.csv")
+        # todo: check incrociato probabilità di anomalia
+        temp_path = os.path.join(temp_folder_path, "ctx_thermal_sens_xgboost", f"{foglia}.csv")
 
         if not os.path.exists(temp_path):
             df_energy["thermal_sensitive"] = False
@@ -40,8 +41,8 @@ def combine_soft_evidence(case_study: str):
         df_energy = df_energy.rename(columns={"anomaly_prob": "energy_anomaly_prob"})
 
         df_temp = pd.read_csv(temp_path)
-        df_temp = df_temp[["Date", "Context", "Cluster", "Temperature", "prob_anomaly"]]
-        df_temp = df_temp.rename(columns={"prob_anomaly": "temp_anomaly_prob"})
+        df_temp = df_temp[["Date", "Context", "Cluster", "Mean_Temp", "anm_prob"]]
+        df_temp = df_temp.rename(columns={"anm_prob": "temp_anomaly_prob"})
 
         df_merged = df_energy.merge(df_temp, on=["Date", "Context", "Cluster"], how="left")
         df_merged["thermal_sensitive"] = df_merged["temp_anomaly_prob"].notna()

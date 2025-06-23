@@ -37,7 +37,7 @@ run_cmp(case_study)
 run_soft_evd_LR(case_study, 50, 0.6, 0.8)
 
 # Creazione thermal evidences
-find_thermal_sens(case_study, 1000, False)
+find_thermal_sens(case_study, 1500, "minmax")
 calc_temp_anm_prob(case_study)
 
 # Combinazione delle energy evidences e thermal evidences

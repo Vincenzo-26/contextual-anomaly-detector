@@ -127,7 +127,7 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
         gmm2 = GaussianMixture(n_components=2, random_state=0).fit(X_energy)
 
         bic_diff = gmm1.bic(X_energy) - gmm2.bic(X_energy)
-        bic_threshold = 50 # puoi regolare questo valore
+        bic_threshold = 50
 
         if bic_diff > bic_threshold:
             labels = gmm2.predict(X_energy)

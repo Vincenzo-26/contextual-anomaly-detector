@@ -153,4 +153,4 @@ def plot_inference_result(case_study, date, context):
     fig.show()
 
 if __name__ == "__main__":
-    plot_inference_result(case_study="Cabina", date="2024-09-03", context=2)
+    plot_inference_result(case_study="Cabina", date="2025-03-05", context=2)
