@@ -58,23 +58,6 @@ def clean_time_series(df: pd.DataFrame, unit: str = None) -> pd.DataFrame:
 
     return df
 
-def find_parents_of_leaves(subtree: dict) -> list:
-    """
-    Ricorsivamente restituisce i nomi dei nodi che hanno solo figli foglia (cioè figli che sono dict vuoti).
-    """
-    parents_of_leaves = []
-
-    for key, value in subtree.items():
-        if isinstance(value, dict):
-            # Se tutti i figli di questo nodo sono foglie, aggiungilo alla lista
-            if all(isinstance(v, dict) and not v for v in value.values()):
-                parents_of_leaves.append(key)
-            else:
-                # Altrimenti continua a cercare in profondità
-                parents_of_leaves.extend(find_parents_of_leaves(value))
-
-    return parents_of_leaves
-
 def get_children_of_node(load_tree: dict, node: str) -> list:
     """
     Cerca i figli diretti di un nodo all'interno del Load Tree.
@@ -197,7 +180,6 @@ def run_energy_in_tw(case_study: str, sottocarico: str):
             })
 
     return pd.DataFrame(results)
-
 
 def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: int):
     """
@@ -398,6 +380,15 @@ def get_nodes_by_level(load_tree: dict) -> list[list[str]]:
 
     max_level = max(levels_dict.keys())
     return [levels_dict[i] for i in reversed(range(max_level + 1))]  # bottom-up
+
+def build_child_map(tree: dict) -> dict[str, list[str]]:
+    child_map = {}
+    def recurse(subtree):
+        for parent, children in subtree.items():
+            child_map[parent] = list(children.keys())
+            recurse(children)
+    recurse(tree)
+    return child_map
 
 def scale_data(X, method):
     if method is False:

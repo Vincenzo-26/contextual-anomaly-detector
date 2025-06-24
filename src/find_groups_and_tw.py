@@ -25,16 +25,17 @@ def run_groups_and_tw(case_study: str):
 
     # Load the data
     df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{case_study}.csv"), index_col=0, parse_dates=True)
-    df_clean, _, _ = process_data(df, variable="value")
+    # df_clean, _, _ = process_data(df, variable="value")
 
     if holidays is not None:
-        df_holidays = extract_holidays(df_clean, holidays)
+        # df_holidays = extract_holidays(df_clean, holidays)
+        df_holidays = extract_holidays(df, holidays)
     else:
         df_holidays = None
 
     # Run the clustering algorithm
     groups = run_clustering(df, df_holidays)
-
+    print("\n")
     # Run the time windows algorithm
     time_windows = run_cart(df)
 
@@ -47,4 +48,4 @@ def run_groups_and_tw(case_study: str):
 
 
 if __name__ == "__main__":
-    run_groups_and_tw("Cabina")
+    run_groups_and_tw("Total")

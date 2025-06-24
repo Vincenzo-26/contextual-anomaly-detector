@@ -26,69 +26,68 @@ def plot_groups(case_study: str):
     os.makedirs(output_folder, exist_ok=True)
 
     levels = get_nodes_by_level(config["Load Tree"])
-    for level in levels:
-        for leaf in level:
-            # Load the data
-            df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{leaf}.csv"), index_col=0,
-                             parse_dates=True)
-            df["date"] = df.index.date
-            df = df.reset_index(drop=False)
+    all_nodes = [node for level in levels for node in level]
+    for leaf in all_nodes:
+        df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{leaf}.csv"), index_col=0,
+                         parse_dates=True)
+        df["date"] = df.index.date
+        df = df.reset_index(drop=False)
 
-            # Load the groups
-            groups = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv"), index_col=0)
-            groups.index = pd.to_datetime(groups.index).date
-            groups = groups.melt(ignore_index=False)
-            groups = groups[groups["value"] == 1]
-            groups = groups.drop(columns=["value"])
-            groups = groups.rename(columns={"variable": "Cluster"})
-            groups = groups.reset_index(names="date")
+        # Load the groups
+        groups = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv"), index_col=0)
+        groups.index = pd.to_datetime(groups.index).date
+        groups = groups.melt(ignore_index=False)
+        groups = groups[groups["value"] == 1]
+        groups = groups.drop(columns=["value"])
+        groups = groups.rename(columns={"variable": "Cluster"})
+        groups = groups.reset_index(names="date")
 
-            # Merge the groups with the data
-            df = df.merge(groups, on=["date"], how="left")
+        # Merge the groups with the data
+        df = df.merge(groups, on=["date"], how="left")
 
-            df["hour"] = df["timestamp"].dt.strftime("%H:%M")
+        df["hour"] = df["timestamp"].dt.strftime("%H:%M")
 
-            df = df.sort_values(by=["Cluster", "timestamp"])
+        df = df.sort_values(by=["Cluster", "timestamp"])
 
-            fig = make_subplots(rows=1, cols=len(df["Cluster"].unique()), shared_xaxes=True, horizontal_spacing=0.02,
-                                subplot_titles=df["Cluster"].unique(), shared_yaxes=True)
+        fig = make_subplots(rows=1, cols=len(df["Cluster"].unique()), shared_xaxes=True, horizontal_spacing=0.02,
+                            subplot_titles=df["Cluster"].unique(), shared_yaxes=True)
 
-            # Generate a color palette and then convert into rgb string
-            palette = sns.color_palette("magma", len(df["Cluster"].unique()))
-            palette = [f"rgb({int(color[0] * 255)}, {int(color[1] * 255)}, {int(color[2] * 255)})" for color in palette]
+        # Generate a color palette and then convert into rgb string
+        palette = sns.color_palette("magma", len(df["Cluster"].unique()))
+        palette = [f"rgb({int(color[0] * 255)}, {int(color[1] * 255)}, {int(color[2] * 255)})" for color in palette]
 
-            for i, cluster in enumerate(df["Cluster"].unique()):
-                df_cluster = df[df["Cluster"] == cluster]
+        for i, cluster in enumerate(df["Cluster"].unique()):
+            df_cluster = df[df["Cluster"] == cluster]
 
-                for date in df_cluster["date"].unique():
-                    df_day = df_cluster[df_cluster["date"] == date]
-                    fig.add_trace(
-                        go.Scatter(
-                            x=df_day["hour"],
-                            y=df_day["value"],
-                            mode='lines',
-                            name=str(date),  # Optional: change to '' if you want no legend entries
-                            showlegend=False,  # Set to True if you want to see dates in legend
-                            line=dict(color=palette[i], width=1),
-                            hovertemplate=f"{date} %{{x}}: %{{y:.2f}} W<extra></extra>",
+            for date in df_cluster["date"].unique():
+                df_day = df_cluster[df_cluster["date"] == date]
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_day["hour"],
+                        y=df_day["value"],
+                        mode='lines',
+                        name=str(date),  # Optional: change to '' if you want no legend entries
+                        showlegend=False,  # Set to True if you want to see dates in legend
+                        line=dict(color=palette[i], width=1),
+                        hovertemplate=f"{date} %{{x}}: %{{y:.2f}} W<extra></extra>",
 
-                        ),
-                        row=1,
-                        col=i + 1
-                    )
+                    ),
+                    row=1,
+                    col=i + 1
+                )
 
-            fig.update_layout(
-                title=f"{leaf}",
-                xaxis_title='Hour',
-                yaxis_title='Power [W]',
-                template='plotly_white',
-                title_x=0.5,
-                title_font=dict(size=24),
-                xaxis_tickfont=dict(size=14),
-                yaxis_tickfont=dict(size=14),
-            )
+        fig.update_layout(
+            title=f"{leaf}",
+            xaxis_title='Hour',
+            yaxis_title='Power [W]',
+            template='plotly_white',
+            title_x=0.5,
+            title_font=dict(size=24),
+            xaxis_tickfont=dict(size=14),
+            yaxis_tickfont=dict(size=14),
+        )
 
-            fig.write_html(os.path.join(output_folder, f"groups_{leaf}.html"), include_plotlyjs="cdn")
+        fig.write_html(os.path.join(output_folder, f"groups_{leaf}.html"), include_plotlyjs="cdn")
 
 if __name__ == "__main__":
-    plot_groups("Cabina")
+    plot_groups("Total")

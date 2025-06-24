@@ -7,12 +7,12 @@ from settings import PROJECT_ROOT
 from src.cmp.cmp import cmp_calculation
 
 
-def run_cmp(case_study: str, groups_tw_case_study: str = None):
+def run_cmp(case_study: str, groups_and_tw_case_study: str = None):
     """
     Run the CMP calculation for a given case study. Save the results in the result folder of the case study.
     Args:
         case_study (str): The name of the case study to process.
-        groups_tw_case_study (str, optional): The name of the case study to which the time windows and groups refer.
+        groups_and_tw_case_study (str, optional): The name of the case study to which the time windows and groups refer.
             If None, defaults to the value of `case_study`.
     Returns:
         None
@@ -22,7 +22,7 @@ def run_cmp(case_study: str, groups_tw_case_study: str = None):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, f"config.json"), "r") as f:
         config = json.load(f)
 
-    group_tw_path = groups_tw_case_study if groups_tw_case_study else case_study
+    group_tw_path = groups_and_tw_case_study if groups_and_tw_case_study else case_study
 
     # Load the data
     load_tree = config["Load Tree"]
@@ -59,4 +59,4 @@ def run_cmp(case_study: str, groups_tw_case_study: str = None):
 
 
 if __name__ == "__main__":
-    run_cmp("AuleP", "Cabina")
+    run_cmp("Total")

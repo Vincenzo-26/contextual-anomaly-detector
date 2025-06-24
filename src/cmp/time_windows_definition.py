@@ -26,6 +26,7 @@ def run_cart(data: pd.DataFrame) -> pd.DataFrame:
     data['time'] = data.index.time
     working_days_df = data[~data.index.weekday.isin([5, 6])]
     # working_days_df = working_days_df.drop(columns=['temp'])
+    working_days_df = working_days_df.copy()
     working_days_df['time_numeric'] = working_days_df['time'].apply(lambda x: x.hour + x.minute / 60)
 
     # Defining X and y for the CART
@@ -101,5 +102,6 @@ def run_cart(data: pd.DataFrame) -> pd.DataFrame:
             min_samples_leaf += 500
     n_iterations += 1
 
-    logger.info(f"📊 Cart algorithm completed successfully. Final number of time windows: {len(time_windows)}")
+    # logger.info(f"📊 Cart algorithm completed successfully. Final number of time windows: {len(time_windows)}")
+    print(f"📊 Cart algorithm completed successfully. Final number of time windows: {len(time_windows)}")
     return time_windows
