@@ -14,10 +14,10 @@ from calc_temp_anm import calc_temp_anm_prob
 
 start_time = time.time()
 start_readable = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-print(f"Starting analysis: {start_readable}")
+print(f"\nStarting analysis: {start_readable}")
 
 case_study = "Total"
-
+print_boxed_title(f"Case study: {case_study}")
 # # creazione dei dataframe (uno per ogni nodo del load tree)
 # run_data(case_study)
 #

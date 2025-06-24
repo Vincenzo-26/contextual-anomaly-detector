@@ -7,7 +7,7 @@ from scipy.spatial.distance import cdist
 import numpy as np
 
 
-def run_clustering(data: pd.DataFrame, df_holidays: Union[None, pd.DataFrame]) -> pd.DataFrame:
+def run_clustering(data: pd.DataFrame, df_holidays: Union[None, pd.DataFrame], case_study: str) -> pd.DataFrame:
     """
     Run hierarchical clustering algorithm with ward linkage method. The algorithm will cluster the data into 2 fixed clusters (sundays and saturdays) and a variable number of clusters for the working days.
     In particular, the number of clusters for the working days is determined by the silhouette score between 3 and 6 clusters.
@@ -20,7 +20,7 @@ def run_clustering(data: pd.DataFrame, df_holidays: Union[None, pd.DataFrame]) -
     """
 
     # logger.info("🌲 Running Hierarchical clustering algorithm with ward linkage method.")
-    print("🌲 Running Hierarchical clustering algorithm with ward linkage method.")
+    print(f"🌲 Running Hierarchical clustering algorithm with ward linkage method on case study: '{case_study}'")
     data['date'] = data.index.date
     data['time'] = data.index.time
 

@@ -12,6 +12,7 @@ import pandas as pd
 from datetime import datetime
 from settings import PROJECT_ROOT
 import json
+from sklearn.impute import KNNImputer
 
 def print_boxed_title(title: str, side_padding: int = 15):
     total_length = len(title) + side_padding * 2
@@ -21,42 +22,147 @@ def print_boxed_title(title: str, side_padding: int = 15):
     print(f"{spaces}{title}{spaces}")
     print(f"{border}\n")
 
+
 def clean_time_series(df: pd.DataFrame, unit: str = None) -> pd.DataFrame:
     """
-    Pulisce e riallinea un DataFrame temporale con indice datetime.
-    Converte in watt se i dati sono in kWh o Wh.
+    Esegue il preprocessing di una serie temporale con frequenza a 15 minuti, contenente le colonne 'timestamp' e 'value'.
+    Per ogni giorno:
+      - se il giorno è completo (nessun valore mancante): viene mantenuto invariato e utilizzato per addestrare il KNN;
+      - se presenta solo brevi interruzioni (gruppi di NaN di lunghezza ≤ 4): viene interpolato linearmente;
+      - se presenta buchi intermedi (5 ≤ lunghezza NaN ≤ 32): viene ricostruito con imputazione tramite KNN;
+      - se presenta buchi troppo estesi (lunghezza NaN > 32, cioè oltre 8 ore): il giorno viene scartato.
+
+    Il KNN viene addestrato sui giorni completi e su quelli interpolati. Al termine, viene restituito un dataframe coerente e continuo,
+    contenente tutti i giorni validi (originali, interpolati o imputati), ordinati nel tempo.
+
+    Args:
+        df (pd.DataFrame): Serie temporale da pulire, con colonne 'timestamp' (datetime) e 'value' (valore misurato).
+        unit (str, optional): Unità di misura dei dati originali ('kWh', 'Wh' o 'W'). Se indicata, converte i dati in Watt.
+
+    Returns:
+        pd.DataFrame: Serie temporale pulita, indicizzata per timestamp, con frequenza regolare di 15 minuti.
     """
+    def get_nan_groups(series: pd.Series) -> list:
+        is_nan = series.isnull()
+        groups = []
+        current_start = None
+        for i, val in enumerate(is_nan):
+            if val and current_start is None:
+                current_start = i
+            elif not val and current_start is not None:
+                groups.append((current_start, i - 1))
+                current_start = None
+        if current_start is not None:
+            groups.append((current_start, len(series) - 1))
+        return groups
+
+    def interpolate_short_gaps(series: pd.Series, max_missing: int = 4) -> pd.Series:
+        series = series.copy()
+        nan_groups = get_nan_groups(series)
+        for start, end in nan_groups:
+            if end - start + 1 <= max_missing:
+                left = max(start - 1, 0)
+                right = min(end + 1, len(series) - 1)
+                series.iloc[left:right + 1] = series.iloc[left:right + 1].interpolate(method='time')
+        return series
+
+    df = df.copy()
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df.set_index('timestamp', inplace=True)
     df = df.sort_index()
     df = df[~df.index.duplicated(keep='first')]
 
-    start = df.index.min()
-    end = df.index.max()
-
-    full_index = pd.date_range(start=start, end=end, freq="15min")
+    full_index = pd.date_range(start=df.index.min(), end=df.index.max(), freq="15min")
     df = df.reindex(full_index)
-    df = df.interpolate(method="time")
-    df = df[df.index.minute.isin([0, 15, 30, 45])]
-
-    first_day = df.index[0].normalize()
-    if df[df.index.normalize() == first_day].index.min().time() != pd.Timestamp("00:00").time():
-        df = df[df.index.normalize() > first_day]
-
-    last_day = df.index[-1].normalize()
-    if df[df.index.normalize() == last_day].index.max().time() != pd.Timestamp("23:45").time():
-        df = df[df.index.normalize() < last_day]
 
     if unit:
-        # 🔁 Conversione in watt (se serve)
-        if unit.lower() == "kwh":
-            df = df * 4000
-        elif unit.lower() == "wh":
-            df = df * (1000 / 0.25)  # = 4000
-        elif unit.lower() == "w":
-            pass  # nessuna conversione necessaria
-        else:
+        if unit.lower() in ["kwh", "wh"]:
+            df['value'] *= 4000
+        elif unit.lower() != "w":
             print(f"⚠️ Unità sconosciuta: {unit} - nessuna conversione applicata.")
 
-    return df
+    training_profiles = []
+    to_impute_profiles = []
+    output_days = []
+    stats = {'complete': 0, 'interpolated': 0, 'removed': 0, 'knn': 0}
+
+    full_hours = pd.date_range("00:00", "23:45", freq="15min").time
+    for day in df.index.normalize().unique():
+        expected_index = pd.date_range(start=day, end=day + pd.Timedelta("23:45:00"), freq="15min")
+        daily = df.reindex(expected_index)
+
+        if daily['value'].isnull().sum() == 0:
+            # Giorno completo
+            daily['date'] = daily.index.date
+            daily['hour'] = daily.index.time
+            profile = daily.pivot(index='date', columns='hour', values='value')
+            training_profiles.append(profile)
+            output_days.append(daily[['value']])
+            stats['complete'] += 1
+            continue
+
+        nan_groups = get_nan_groups(daily['value'])
+        max_gap = max([(end - start + 1) for start, end in nan_groups], default=0)
+
+        if max_gap > 32:
+            stats['removed'] += 1
+            continue
+
+        if all((end - start + 1) <= 4 for start, end in nan_groups):
+            daily['value'] = interpolate_short_gaps(daily['value'], max_missing=4)
+            if daily['value'].isnull().sum() == 0:
+                daily['date'] = daily.index.date
+                daily['hour'] = daily.index.time
+                profile = daily.pivot(index='date', columns='hour', values='value')
+                training_profiles.append(profile)
+                output_days.append(daily[['value']])
+                stats['interpolated'] += 1
+        else:
+            to_impute_profiles.append((day, daily))
+
+    # Addestramento KNN
+    if training_profiles:
+        X_train = pd.concat(training_profiles)
+        X_train = X_train.reindex(columns=full_hours, fill_value=np.nan)
+        imputer = KNNImputer(n_neighbors=5)
+        imputer.fit(X_train)
+    else:
+        imputer = None
+
+    # Imputazione KNN
+    for day, daily in to_impute_profiles:
+        try:
+            daily = daily.copy()
+            daily['date'] = daily.index.date
+            daily['hour'] = daily.index.time
+            profile = daily.pivot(index='date', columns='hour', values='value')
+            profile = profile.reindex(columns=full_hours)
+
+            if imputer is None:
+                raise ValueError("Untrained KNN (no valid days)")
+
+            imputed = pd.DataFrame(imputer.transform(profile),
+                                   index=profile.index,
+                                   columns=profile.columns)
+            df_rec = imputed.stack().reset_index()
+            df_rec.columns = ['date', 'hour', 'value']
+            df_rec['timestamp'] = pd.to_datetime(df_rec['date'].astype(str) + ' ' + df_rec['hour'].astype(str))
+            df_rec.set_index('timestamp', inplace=True)
+            output_days.append(df_rec[['value']])
+            stats['knn'] += 1
+        except Exception as e:
+            print(f"⚠️ Errore KNN per il giorno {day}: {e}")
+            stats['removed'] += 1
+
+    df_cleaned = pd.concat(output_days).sort_index()
+    df_cleaned = df_cleaned[['value']].reset_index()
+    df_cleaned.columns = ['timestamp', 'value']
+
+    print(f"Whole days: {stats['complete']}")
+    print(f"Interpolated days (nan gap <= 4h): {stats['interpolated']}")
+    print(f"Rebuilt days (4h < nan gap <= 8h): {stats['knn']}")
+    print(f"Removed days (nan gap > 8h): {stats['removed']}")
+    return df_cleaned
 
 def get_children_of_node(load_tree: dict, node: str) -> list:
     """

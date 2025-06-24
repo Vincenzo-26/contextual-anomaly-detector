@@ -4,7 +4,8 @@ import pandas as pd
 
 from src.cmp.groups_definition import run_clustering
 from src.cmp.time_windows_definition import run_cart
-from src.cmp.utils import process_data, extract_holidays
+from src.cmp.utils import extract_holidays
+from utils import print_boxed_title
 from settings import PROJECT_ROOT
 
 
@@ -16,7 +17,7 @@ def run_groups_and_tw(case_study: str):
     Returns:
         None
     """
-
+    print_boxed_title("Finding Clusters and Contexts")
     # Load the configuration file
     with open(os.path.join(PROJECT_ROOT, "data", case_study, f"config.json"), "r") as f:
         config = json.load(f)
@@ -34,7 +35,7 @@ def run_groups_and_tw(case_study: str):
         df_holidays = None
 
     # Run the clustering algorithm
-    groups = run_clustering(df, df_holidays)
+    groups = run_clustering(df, df_holidays, case_study)
     print("\n")
     # Run the time windows algorithm
     time_windows = run_cart(df)
