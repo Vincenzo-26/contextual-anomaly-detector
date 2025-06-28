@@ -3,6 +3,7 @@ import json
 import pandas as pd
 from loguru import logger
 
+from utils import print_boxed_title
 from settings import PROJECT_ROOT
 from src.cmp.cmp import cmp_calculation
 
@@ -17,7 +18,7 @@ def run_cmp(case_study: str, groups_and_tw_case_study: str = None):
     Returns:
         None
     """
-
+    print_boxed_title("CMP calculation 🧮")
     # Load the configuration file
     with open(os.path.join(PROJECT_ROOT, "data", case_study, f"config.json"), "r") as f:
         config = json.load(f)

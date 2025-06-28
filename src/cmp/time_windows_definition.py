@@ -19,7 +19,7 @@ def run_cart(data: pd.DataFrame) -> pd.DataFrame:
     'from', 'to', 'duration', and 'node'.
     """
 
-    min_samples_leaf = int(len(data) * 0.1)
+    min_samples_leaf = int(len(data) * 0.15)
 
     # Data preparation
     data['date'] = data.index.date

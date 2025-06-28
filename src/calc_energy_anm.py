@@ -55,7 +55,7 @@ def logistic_regression(x_normal, x_anomaly, x_target, c: int = 50) -> np.ndarra
     return model.predict_proba(x_target.reshape(-1, 1))[:, 1]
 
 
-def run_soft_evd_LR(case_study: str, c: int, k_sigmoide: float = 6, threshold_metrics: float = 0.8):
+def run_soft_evd_LR(case_study: str, c: int, k_sigmoide: float = 4, threshold_metrics: float = 0.8):
     """
     Calcola la probabilità di anomalia per ciascun cluster di ciascun contesto e foglia del load tree,
     utilizzando:
@@ -68,7 +68,7 @@ def run_soft_evd_LR(case_study: str, c: int, k_sigmoide: float = 6, threshold_me
     Args:
         case_study (str): Nome del caso studio.
         c (float): Parametro di regolarizzazione della regressione logistica (c=50 da analisi di sensibilità).
-        k_sigmoide (float): Pendenza della sigmoide in caso di assenza di anomalie (default 6).
+        k_sigmoide (float): Pendenza della sigmoide in caso di assenza di anomalie (default 4).
         threshold_metrics (float): Soglia sulla probabilità per considerare un punto anomalo (default 0.8).
 
     Returns:
@@ -144,7 +144,7 @@ def run_soft_evd_LR(case_study: str, c: int, k_sigmoide: float = 6, threshold_me
             x_norm_flat = x_normal.flatten()
 
             if anm_subset.empty or anm_subset["Energy"].isna().all():
-                # Caso 1: Nessun punto anomalo → uso sigmoide basata su IQR
+                # Caso 1: Nessun punto anomalo → sigmoide basata su IQR
                 print(f"[Ctx {context} | Clst {cluster}] no anomaly data -> Using sigmoidal anomaly probability.")
                 anomaly_prob = sigmoid_iqr(x_normal, x_target, k_sigmoide)
                 energy_data_full.loc[mask, "anomaly_prob"] = anomaly_prob

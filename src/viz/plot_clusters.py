@@ -79,7 +79,7 @@ def plot_groups(case_study: str):
         fig.update_layout(
             title=f"{leaf}",
             xaxis_title='Hour',
-            yaxis_title='Power [W]',
+            yaxis_title='Power [kW]',
             template='plotly_white',
             title_x=0.5,
             title_font=dict(size=24),

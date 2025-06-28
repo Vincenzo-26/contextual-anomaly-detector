@@ -23,7 +23,7 @@ def print_boxed_title(title: str, side_padding: int = 15):
     print(f"{border}\n")
 
 
-def clean_time_series(df: pd.DataFrame, unit: str = None) -> pd.DataFrame:
+def clean_time_series(df: pd.DataFrame, unit: str = None) -> tuple[pd.DataFrame, dict]:
     """
     Esegue il preprocessing di una serie temporale con frequenza a 15 minuti, contenente le colonne 'timestamp' e 'value'.
     Per ogni giorno:
@@ -66,6 +66,10 @@ def clean_time_series(df: pd.DataFrame, unit: str = None) -> pd.DataFrame:
                 series.iloc[left:right + 1] = series.iloc[left:right + 1].interpolate(method='time')
         return series
 
+
+    hour_to_remove = 4
+    hour_to_interp = 1
+
     df = df.copy()
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df.set_index('timestamp', inplace=True)
@@ -104,12 +108,12 @@ def clean_time_series(df: pd.DataFrame, unit: str = None) -> pd.DataFrame:
         nan_groups = get_nan_groups(daily['value'])
         max_gap = max([(end - start + 1) for start, end in nan_groups], default=0)
 
-        if max_gap > 32:
+        if max_gap > hour_to_remove * 4:
             stats['removed'] += 1
             continue
 
         if all((end - start + 1) <= 4 for start, end in nan_groups):
-            daily['value'] = interpolate_short_gaps(daily['value'], max_missing=4)
+            daily['value'] = interpolate_short_gaps(daily['value'], max_missing=(hour_to_interp*4))
             if daily['value'].isnull().sum() == 0:
                 daily['date'] = daily.index.date
                 daily['hour'] = daily.index.time
@@ -159,10 +163,19 @@ def clean_time_series(df: pd.DataFrame, unit: str = None) -> pd.DataFrame:
     df_cleaned.columns = ['timestamp', 'value']
 
     print(f"Whole days: {stats['complete']}")
-    print(f"Interpolated days (nan gap <= 4h): {stats['interpolated']}")
-    print(f"Rebuilt days (4h < nan gap <= 8h): {stats['knn']}")
-    print(f"Removed days (nan gap > 8h): {stats['removed']}")
-    return df_cleaned
+    print(f"Interpolated days (nan gap <= {hour_to_interp}h): {stats['interpolated']}")
+    print(f"Rebuilt days (4h < nan gap <= {hour_to_remove}h): {stats['knn']}")
+    print(f"Removed days (nan gap > {hour_to_remove}h): {stats['removed']}")
+    date_complete = pd.to_datetime(pd.concat(training_profiles).index.get_level_values(0).unique()) if training_profiles else []
+    date_interpolated = [df.index[0].date() for df in output_days[len(date_complete):len(date_complete) + stats['interpolated']]]
+    date_knn = [df.index[0].date() for df in output_days[len(date_complete) + stats['interpolated']:]]
+
+    stats["dates"] = {
+        "complete": pd.Series(date_complete).drop_duplicates().tolist(),
+        "interpolated": date_interpolated,
+        "knn": date_knn
+    }
+    return df_cleaned, stats
 
 def get_children_of_node(load_tree: dict, node: str) -> list:
     """
