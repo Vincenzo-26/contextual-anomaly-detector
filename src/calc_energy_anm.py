@@ -88,18 +88,21 @@ def run_soft_evd_LR(case_study: str, c: int, k_sigmoide: float = 4, threshold_me
     false_positive_total = 0
     false_negative_total = 0
 
+    thermal_sensitive_load_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "ctx_thermal_sens")
+    thermal_sensitive_loads = [os.path.splitext(f)[0] for f in os.listdir(thermal_sensitive_load_path) if f.endswith(".csv")]
+    
     all_data = []
-
-    foglie = find_leaf_nodes(config["Load Tree"])
-
-    for foglia in foglie:
+    leaves = find_leaf_nodes(config["Load Tree"])
+    for foglia in leaves:
+        # if foglia in thermal_sensitive_loads:
+        #     continue
         print(f"\033[91m{foglia}\033[0m")
 
         energy_data_full = run_energy_in_tw(case_study, foglia)
         anm_table = pd.read_csv(os.path.join(anomaly_path, f"anomaly_table_{foglia}.csv"))
 
-        anm_table["Date"] = pd.to_datetime(anm_table["Date"]).dt.date
-        energy_data_full["Date"] = pd.to_datetime(energy_data_full["Date"]).dt.date
+        anm_table["Date"] = pd.to_datetime(anm_table["Date"], errors="coerce").dt.date
+        energy_data_full["Date"] = pd.to_datetime(energy_data_full["Date"], errors="coerce").dt.date
 
         merged = energy_data_full.merge(
             anm_table[["Date", "Context", "Cluster"]],
@@ -198,6 +201,7 @@ def run_soft_evd_LR(case_study: str, c: int, k_sigmoide: float = 4, threshold_me
 if __name__ == "__main__":
 
     sensitivity_analisys = False
+    case_study = "Total_cut"
 
     if sensitivity_analisys:
         c_list = [0.01, 0.1, 0.5, 1, 2, 5, 10, 20, 50]
@@ -205,9 +209,9 @@ if __name__ == "__main__":
 
         for C in c_list:
             print(f"\n===> Running for C={C}")
-            run_soft_evd_LR("Cabina", C)
+            run_soft_evd_LR(case_study, C)
 
-            result_path = os.path.join(PROJECT_ROOT, "results", "Cabina", "Evidences_LR")
+            result_path = os.path.join(PROJECT_ROOT, "results", f"{case_study}", "Evidences_LR")
             all_dfs = []
             for file in os.listdir(result_path):
                 if file.endswith(".csv"):
@@ -234,23 +238,19 @@ if __name__ == "__main__":
             aucs.append(auc)
 
         plt.figure(figsize=(8, 6))
-        plt.plot(c_list, precisions, 'o-', label='Precision', color='blue')
-        plt.plot(c_list, recalls, 's--', label='Recall', color='orange')
-        plt.plot(c_list, aucs, 'd-.', label='ROC AUC', color='green')
+        plt.plot(c_list, precisions, 'o-', label='Precision', color='#1f77b4')
+        plt.plot(c_list, recalls, 's-', label='Recall', color='#ff7f0e')
+        plt.plot(c_list, aucs, 'd-', label='ROC AUC', color='#2ca02c')
 
         max_prec_idx = np.argmax(precisions)
         max_recall_idx = np.argmax(recalls)
         max_auc_idx = np.argmax(aucs)
 
-        plt.scatter([c_list[max_prec_idx]], [precisions[max_prec_idx]], color='red', zorder=5)
-        plt.scatter([c_list[max_recall_idx]], [recalls[max_recall_idx]], color='red', zorder=5)
-        plt.scatter([c_list[max_auc_idx]], [aucs[max_auc_idx]], color='red', zorder=5)
-
         plt.xscale('log')
-        plt.xlabel("Valore di C (regolarizzazione inversa)")
-        plt.ylabel("Score")
-        plt.title("Performance delle metriche al variare di C")
-        plt.legend()
+        plt.xlabel("C", fontsize=12)
+        plt.ylabel("Score", fontsize=12)
+        plt.tick_params(axis='both', labelsize=10)
+        plt.legend(fontsize=10)
         plt.grid(True)
         plt.tight_layout()
         plt.show()
@@ -260,5 +260,5 @@ if __name__ == "__main__":
         print(f"→ Recall massimo:     {recalls[max_recall_idx]:.3f} con C = {c_list[max_recall_idx]}")
         print(f"→ ROC AUC massimo:    {aucs[max_auc_idx]:.3f} con C = {c_list[max_auc_idx]}")
     else:
-        run_soft_evd_LR("Cabina", 50, 0.6, 0.8)
+        run_soft_evd_LR(case_study, 50, 0.4, 0.8)
 

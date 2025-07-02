@@ -25,7 +25,7 @@ def run_groups_and_tw(case_study: str):
     holidays = config.get("holidays", None)
 
     # Load the data
-    df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{case_study}.csv"), index_col=0, parse_dates=True)
+    df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"Total.csv"), index_col=0, parse_dates=True)
     # df_clean, _, _ = process_data(df, variable="value")
 
     if holidays is not None:
@@ -49,4 +49,4 @@ def run_groups_and_tw(case_study: str):
 
 
 if __name__ == "__main__":
-    run_groups_and_tw("Total")
+    run_groups_and_tw("Total_cut")

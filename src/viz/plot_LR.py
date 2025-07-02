@@ -1,27 +1,20 @@
 from src.utils import *
-import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 from src.calc_energy_anm import sigmoid_iqr, logistic_regression
 
 
 def plot_logistic_regression(case_study: str, foglia: str, context: int, cluster: int, save_plot: bool):
     """
-    Genera un grafico Plotly che mostra la distribuzione dell'energia per una specifica foglia,
+    Genera un grafico matplotlib che mostra la distribuzione dell'energia per una specifica foglia,
     combinazione di context e cluster, sovrapponendo i dati normali e anomali e la curva di
     probabilità di anomalia stimata.
 
-    Il comportamento si adatta dinamicamente ai dati:
-      - Se non ci sono anomalie reali, viene usata una curva sigmoide centrata su max + 1.5*IQR.
-      - Se ci sono una o più anomalie, viene usata una regressione logistica per stimare la curva.
-
     Args:
-        case_study (str): Nome del caso di studio (es. 'Cabina').
-        foglia (str): Nome del sottocarico da analizzare.
+        case_study (str): Nome del caso di studio.
+        foglia (str): Nome del sottocarico.
         context (int): Valore del contesto.
         cluster (int): Numero del cluster.
-        save_plot (bool): Se True, salva il grafico in HTML; se False, lo mostra a schermo.
-
-    Returns:
-        None. Il grafico viene visualizzato o salvato su disco a seconda del flag `save_plot`.
+        save_plot (bool): Se True salva il grafico, altrimenti lo mostra a schermo.
     """
     evidence_path = os.path.join(PROJECT_ROOT, "results", case_study, "Evidences_LR")
     anomaly_path = os.path.join(PROJECT_ROOT, "results", case_study, "anomaly_table")
@@ -44,7 +37,7 @@ def plot_logistic_regression(case_study: str, foglia: str, context: int, cluster
     x_norm_flat = x_normal.flatten()
     x_anomaly = x_target[y_real]
 
-    fig = go.Figure()
+    fig, ax = plt.subplots(figsize=(8, 5))
 
     if len(x_anomaly) == 0:
         # Caso 1: nessuna anomalia
@@ -56,69 +49,53 @@ def plot_logistic_regression(case_study: str, foglia: str, context: int, cluster
         x_plot = np.linspace(x_min, x_max, 600)
 
         anomaly_prob = sigmoid_iqr(x_norm_flat, x_plot, k=6)
-        fig.add_vline(x=threshold, line=dict(color='orange', width=1), name='Max + 1.5*IQR')
-        title_suffix = f"| Sigmoid (K=6) centered in {threshold:.2f}"
+        ax.axvline(x=threshold, color='orange', label=f'Sigmoid center = {threshold:.2f} kWh')
 
     else:
-        x_anomaly = x_anomaly.reshape(-1, 1)
+        x_anomaly_2d = x_anomaly.reshape(-1, 1)
         x_normal_2d = x_normal.reshape(-1, 1)
 
         x_min = min(x_target.min(), x_anomaly.min(), x_normal.min()) - 5
         x_max = max(x_target.max(), x_anomaly.max(), x_normal.max()) + 5
         x_plot = np.linspace(x_min, x_max, 600)
 
-        anomaly_prob = logistic_regression(x_normal_2d, x_anomaly, x_plot)
-        title_suffix = ""
+        anomaly_prob = logistic_regression(x_normal_2d, x_anomaly_2d, x_plot)
 
-    fig.add_trace(go.Scatter(x=x_plot, y=anomaly_prob, mode='lines', name='Anomaly Probability',
-                             line=dict(color='black', width=1),
-                             hovertemplate='Energy: %{x:.2f} kWh<br>Anomaly Prob: %{y:.3f}<extra></extra>'))
+    # Curva di probabilità
+    ax.plot(x_plot, anomaly_prob, color='black', label='Anomaly Probability')
 
-    def scatter_points_binary(x_vals, y_val, color, name, dates):
-        probs_interp = np.interp(x_vals, x_plot, anomaly_prob) * 100
-        fig.add_trace(go.Scatter(
-            x=x_vals,
-            y=[y_val] * len(x_vals),
-            mode='markers',
-            name=f'{name} ({len(x_vals)})',
-            marker=dict(color=color, size=7, symbol='circle'),
-            customdata=np.stack((probs_interp, dates), axis=-1),
-            hovertemplate='Energy: %{x:.2f} kWh<br>Anomaly Prob: %{customdata[0]:.1f}%<br>Date: %{customdata[1]}<extra></extra>'
-        ))
+    # Scatter dei punti normali
+    ax.scatter(x_normal, [0]*len(x_normal), color='steelblue', alpha=1, label=f'Normal ({len(x_normal)} items)')
 
-    scatter_points_binary(
-        x_normal, 0, 'blue', 'Normal points',
-        df_sub.loc[~y_real, "Date"].astype(str).values
-    )
-
+    # Scatter dei punti anomali (se ci sono)
     if len(x_anomaly) > 0:
-        x_anomaly_1d = x_anomaly.flatten()
-        scatter_points_binary(
-            x_anomaly_1d, 1, 'red', 'Anomaly points',
-            df_sub.loc[y_real, "Date"].astype(str).values
-        )
+        ax.scatter(x_anomaly, [1]*len(x_anomaly), color='#FF9999', alpha=1, label=f'Anomaly ({len(x_anomaly)} items)')
 
-    fig.update_layout(
-        title=f"{foglia} | Context {context} - Cluster {cluster}  {title_suffix}",
-        xaxis_title="Energy [kWh]",
-        yaxis_title="Anomalia [0/1] / Probability [-]",
-        title_x=0.5,
-        template="plotly_white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
+    ax.set_title(f"{foglia} - Context {context} - Cluster {cluster}", fontsize=16)
+    ax.set_xlabel("Energy [kWh]", fontsize=14)
+    ax.set_ylabel("Anomaly probability [-]", fontsize=14)
+    ax.grid(True, linewidth=0.5, alpha=0.4)
+    ax.legend(loc='best')
+    ax.tick_params(axis='both', labelsize=12)
+    ax.legend(loc='best', fontsize=12)
 
     if save_plot:
         output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "plot_LR")
         os.makedirs(output_dir, exist_ok=True)
-        output_file = os.path.join(output_dir, f"{foglia}_ctx{context}_cls{cluster}.html")
-        fig.write_html(output_file, include_plotlyjs="cdn")
+        output_file = os.path.join(output_dir, f"{foglia}_ctx{context}_cls{cluster}.png")
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close()
     else:
-        fig.show()
+        plt.show()
 
 
 if __name__ == "__main__":
 
-    case_study = "Cabina"
+    case_study = "Total_cut"
+
+    thermal_sensitive_load_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "ctx_thermal_sens")
+    thermal_sensitive_loads = [os.path.splitext(f)[0] for f in os.listdir(thermal_sensitive_load_path) if f.endswith(".csv")]
+
     save_plot = True
 
     if save_plot:
@@ -126,13 +103,15 @@ if __name__ == "__main__":
             config = json.load(f)
         foglie = find_leaf_nodes(config["Load Tree"])
         for foglia in foglie:
+            if foglia in thermal_sensitive_loads:
+                continue
             for cls in range(1, 6):
-                for ctx in range(1, 6):
+                for ctx in range(1, 5):
                     plot_logistic_regression(case_study, foglia, ctx, cls, save_plot)
 
     else:
         plot_logistic_regression(case_study=case_study,
-                                 foglia="QE UTA 3_3B_7",
+                                 foglia="Rooftop 4",
                                  context=3,
                                  cluster=3,
                                  save_plot=save_plot)

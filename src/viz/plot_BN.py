@@ -2,20 +2,15 @@ from pyvis.network import Network
 import webbrowser
 import tempfile
 import os
-import sys
+import json
 
-# Aggiunge il root del progetto al PYTHONPATH
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.append(PROJECT_ROOT)
-
-# Import dal pacchetto src
+from src.utils import find_leaf_nodes
+from settings import PROJECT_ROOT
 from src.bayesian_network import build_BN_structural_model
 
-def visualize_bn_interactive(model):
-    """
-    Visualizza una rete bayesiana in modo interattivo usando PyVis (senza salvare permanentemente il file).
-    """
-    net = Network(height="600px", width="100%", directed=True, notebook=False)
+
+def visualize_bn_interactive(model, case_study:str):
+    net = Network(height="100vh", width="100vw", directed=True, notebook=False)
     net.set_options("""
     {
       "physics": {
@@ -36,16 +31,22 @@ def visualize_bn_interactive(model):
       }
     }
     """)
-
-    # Aggiungi nodi e archi
+    with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
+        config = json.load(f)
+    leaves = find_leaf_nodes(config["Load Tree"])
+    # nodi e archi
     for node in model.nodes():
-        net.add_node(node, label=node)
+        if node in leaves:
+            net.add_node(node, label=node, color="#f4cccc", font={"size": 22})
+        elif node == "Total":
+            net.add_node(node, label=node, color="#d9ead3", font={"size": 22})
+        else:
+            net.add_node(node, label=node, color="#97C2FC", font={"size": 22})
     for edge in model.edges():
         net.add_edge(edge[0], edge[1])
 
     # net.show_buttons(filter_=['physics']) #per impostare i parametri a mano
 
-    # Genera file HTML temporaneo
     with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
         temp_path = tmp_file.name
 
@@ -54,5 +55,6 @@ def visualize_bn_interactive(model):
 
 
 if __name__ == "__main__":
-    model = build_BN_structural_model("Cabina")
-    visualize_bn_interactive(model)
+    case_study = "Total_cut"
+    model = build_BN_structural_model(case_study)
+    visualize_bn_interactive(model, case_study)

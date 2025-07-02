@@ -1,11 +1,12 @@
 import os
+
 os.environ["OMP_NUM_THREADS"] = "1"
 import json
 import numpy as np
 import pandas as pd
 import ruptures as rpt
 from settings import PROJECT_ROOT
-from src.utils import get_nodes_by_level, scale_data
+from src.utils import get_nodes_by_level, scale_data, find_leaf_nodes
 import warnings
 from sklearn.metrics import r2_score
 from scipy.stats import spearmanr, ConstantInputWarning
@@ -16,7 +17,8 @@ import matplotlib.colors as mcolors
 from matplotlib import colormaps
 
 
-def check_thermal_sens(df_segment, norm_method: str or bool, corr_thresh=0.3, r2_thresh=0.2, slope_thresh=0.3):
+def check_thermal_sens(df_segment, x_min: float, x_max: float, y_min: float, y_max: float,
+                       corr_thresh=0.3, r2_thresh=0.2, slope_thresh=0.03):
     """
     Verifica se un segmento è termicamente sensibile usando correlazione, pendenza e R².
 
@@ -43,8 +45,8 @@ def check_thermal_sens(df_segment, norm_method: str or bool, corr_thresh=0.3, r2
             print("⚠️ Segmento con input costante: impossibile calcolare la correlazione.")
             corr = np.nan
 
-    x = scale_data(X_raw, norm_method)
-    y = scale_data(y_raw, norm_method).flatten()
+    x = X_raw
+    y = ((y_raw - y_min) / (y_max - y_min)).flatten()
 
     model = LinearRegression().fit(x, y)
     slope = model.coef_[0]
@@ -58,14 +60,13 @@ def check_thermal_sens(df_segment, norm_method: str or bool, corr_thresh=0.3, r2
         "slope": round(slope, 3),
         "r2_score": round(r2, 3),
         "is_thermal_sensitive": is_sensitive,
-        "scaling_used": norm_method,
         "corr_thresh": corr_thresh,
         "slope_thresh": slope_thresh,
         "r2_thresh": r2_thresh
     }
 
 
-def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_check: any):
+def find_thermal_sens(case_study: str, ruptures_penalty: float, norm_method_for_check: any):
     """
     Analizza la sensibilità termica giornaliera per ciascun subload dell'albero dei carichi.
 
@@ -89,29 +90,35 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
     Note: I risultati salvati come file .csv sono presenti solo per i subload con almeno un segmento thermal sensitive
           mentre i plot .png nelle cartelle in tutti i casi.
     """
+
     def color_text(text, color):
         color_codes = {"red": "\033[91m", "green": "\033[92m", "reset": "\033[0m"}
         return f"{color_codes[color]}{text}{color_codes['reset']}"
-    print(f"\nRuptures penalty: {ruptures_penalty}\nNorm method form checking thermal sensitivity: {norm_method_for_check}\n")
+
+    print(
+        f"\nRuptures penalty: {ruptures_penalty}\nNorm method form checking thermal sensitivity: {norm_method_for_check}\n")
     with open(os.path.join(PROJECT_ROOT, "data", case_study, f"config.json"), "r") as f:
         config = json.load(f)
 
     output_folder = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "daily_thermal_sens")
-    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity", "daily_thermal_sens")
+    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity",
+                                     "daily_thermal_sens")
     os.makedirs(output_folder, exist_ok=True)
     os.makedirs(output_folder_viz, exist_ok=True)
 
-    levels = get_nodes_by_level(config["Load Tree"])
-    first_level = levels[0]
-    for leaf in first_level:
+    # levels = get_nodes_by_level(config["Load Tree"])
+    # first_level = levels[0]
+    leaves = find_leaf_nodes(config["Load Tree"])
+    for leaf in leaves:
         df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{leaf}.csv"), index_col=0, parse_dates=True)
         temp_file = config["Outside Temperature"]
-        df_temp = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{temp_file}.csv"), index_col=0, parse_dates=True)
+        df_temp = pd.read_csv(os.path.join(PROJECT_ROOT, "data", case_study, f"{temp_file}.csv"), index_col=0,
+                              parse_dates=True)
 
         df = df.merge(df_temp, left_index=True, right_index=True)
         df.columns = ["Power", "Temperature"]
-        df = df.resample("1D").agg({"Power": "sum", "Temperature": "mean"})
-        df["Energy"] = df["Power"] * 0.25 / 1000
+        df["Energy"] = df["Power"] * 0.25
+        df = df.resample("1D").agg({"Power": "mean", "Temperature": "mean", "Energy": "sum"})
 
         # === FILTRAGGIO ===
         df = df[df.index.weekday < 5]
@@ -131,7 +138,11 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
 
         if bic_diff > bic_threshold:
             labels = gmm2.predict(X_energy)
-            df["ModeID"] = labels
+            counts = pd.Series(labels).value_counts()
+            if (counts >= 10).any():  # almeno un cluster con >= 10 punti
+                df["ModeID"] = labels
+            else:
+                df["ModeID"] = 0
         else:
             df["ModeID"] = 0
 
@@ -139,9 +150,11 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
         algo_model = "linear"
 
         fig, ax = plt.subplots(figsize=(10, 6))
+        df["Temp_norm"] = scale_data(df[["Temperature"]], "minmax").flatten()
+        df["Energy_norm"] = scale_data(df[["Energy"]], "minmax").flatten()
         for mode_id in sorted(df["ModeID"].unique()):
             df_mode = df[df["ModeID"] == mode_id].sort_values(by="Temperature")
-            signal = df_mode[["Temperature", "Energy"]].values
+            signal = df_mode[["Temp_norm", "Energy_norm"]].values
             algo = rpt.Pelt(model=algo_model).fit(signal)
             change_points = algo.predict(pen=ruptures_penalty)
             change_points = [cp for cp in change_points if cp < len(df_mode)]
@@ -154,7 +167,8 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
                 if end - start < 2:
                     continue
                 seg = df_mode.iloc[start:end]
-                metrics = check_thermal_sens(seg, norm_method_for_check)
+                metrics = check_thermal_sens(seg, x_min=df["Temperature"].min(), x_max=df["Energy"].max(),
+                                             y_min=df["Energy"].min(), y_max=df["Energy"].max())
                 result = {
                     "ModeID": mode_id,
                     "Segmento": i + 1,
@@ -168,7 +182,7 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
                 color = "green" if result["Thermal Sensitive"] else "red"
                 temp_range_str = (
                     f"Mode {mode_id} - Seg {i + 1}  ->  ΔT: [{result['t_min']}°C, {result['t_max']}°C]  "
-                    f"- slope: {result['slope']:.3f} | r2: {result['r2']:.3f} | spearman: {result['spearmann']:.3f}"
+                    f"- slope: {result['slope']:.3f} | spearman: {result['spearmann']:.3f}"
                 )
                 print(color_text(temp_range_str, color))
                 segs_results.append(result)
@@ -192,7 +206,7 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
         df_all.columns = ["Power", "Temperature"]
         df_all = df_all.resample("1D").agg({"Power": "sum", "Temperature": "mean"})
 
-        df_all["Energy"] = df_all["Power"] * 0.25 / 1000
+        df_all["Energy"] = df_all["Power"] * 0.25
         on_indices = df[df["Mode"] == "on"].index
         df_all["Mode"] = "off"
         df_all.loc[on_indices, "Mode"] = "on"
@@ -200,14 +214,11 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
         df_all.loc[df.index, "ModeID"] = df["ModeID"]
 
         df_all = df_all.sort_values(by="Temperature")
-        weekend_dates = df_all[df_all.index.to_series().dt.weekday >= 5]
         weekday_df = df_all[df_all.index.to_series().dt.weekday < 5]
-        ax.scatter(weekend_dates["Temperature"], weekend_dates["Energy"],
-                   color="orange", label="weekend", s=35, alpha=0.8)
 
         weekday_off_df = weekday_df[weekday_df["Mode"] == "off"]
         ax.scatter(weekday_off_df["Temperature"], weekday_off_df["Energy"],
-                   color="lightgray", label="off (weekday)", s=35, alpha=0.8)
+                   color="gray", label="Off", s=30, alpha=0.6)
 
         weekday_on_df = weekday_df[weekday_df["Mode"] == "on"]
         unique_modes = sorted(df["ModeID"].dropna().unique())
@@ -217,14 +228,15 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
         for mode_id in unique_modes:
             df_mode = weekday_on_df[weekday_on_df["ModeID"] == mode_id]
             ax.scatter(df_mode["Temperature"], df_mode["Energy"],
-                       label=f"Mode {mode_id} (weekday)",
-                       s=35, alpha=0.9, color=colors[mode_id])
-        ax.axhline(threshold, color="gray", linestyle="--", linewidth=1.2, label="Soglia ON-OFF")
-        ax.set_xlabel("Mean temperature [°C]")
-        ax.set_ylabel("Daily energy [kWh]")
-        ax.set_title(f"{leaf} - algo:{algo_model} - penalty: {ruptures_penalty}")
+                       label=f"Mode {mode_id+1} ",
+                       s=30, alpha=0.9, color=colors[mode_id])
+        ax.axhline(threshold, color="gray", linestyle="--", linewidth=1.5, label="On-Off theshold")
+        ax.set_xlabel("Daily mean temperature [°C]", fontsize=16)
+        ax.set_ylabel("Daily energy [kWh]", fontsize=16)
+        ax.set_title(f"{leaf}", fontsize=16)
+        ax.tick_params(axis='both', labelsize=14)
         ax.grid(True)
-        ax.legend()
+        ax.legend(fontsize=14)
         fig.tight_layout()
         plt.savefig(os.path.join(output_folder_viz, f"{leaf}.png"), dpi=300)
         plt.close()
@@ -232,4 +244,4 @@ def find_thermal_sens(case_study: str, ruptures_penalty: int, norm_method_for_ch
 
 
 if __name__ == "__main__":
-    find_thermal_sens("Cabina", 1500, "minmax")
+    find_thermal_sens("Total_cut", 2.56, "minmax")

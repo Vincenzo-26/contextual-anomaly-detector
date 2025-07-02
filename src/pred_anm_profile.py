@@ -29,7 +29,7 @@ def run_dataset(case_study: str):
     groups["date"] = groups["timestamp"].dt.date
     context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
     cluster_cols = [col for col in groups.columns if col.startswith("Cluster_")]
-    soglia_en_max = 0.05
+    soglia_en_max = 0.10
 
 
 

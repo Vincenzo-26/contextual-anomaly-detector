@@ -1,11 +1,18 @@
+import os
+import json
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
 from xgboost import XGBRegressor
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.metrics import mean_absolute_percentage_error
-from src.utils import *
-from settings import PROJECT_ROOT
-import pandas as pd
-import matplotlib.pyplot as plt
 from scipy.stats import normaltest
+
+from src.utils import run_energy_temp, find_leaf_nodes, print_boxed_title
+from settings import PROJECT_ROOT
 
 
 def run_dataset(case_study: str):
@@ -34,8 +41,7 @@ def run_dataset(case_study: str):
     output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost")
     os.makedirs(output_dir, exist_ok=True)
 
-    levels = get_nodes_by_level(config["Load Tree"])
-    first_level = levels[0]
+
 
     groups_path = os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv")
     groups = pd.read_csv(groups_path, parse_dates=["timestamp"])
@@ -44,10 +50,12 @@ def run_dataset(case_study: str):
     cluster_cols = [col for col in groups.columns if col.startswith("Cluster_")]
 
     df_all = []
+    soglia_en_max = 0.10
 
-    soglia_en_max = 0.05
-
-    for leaf in first_level:
+    # levels = get_nodes_by_level(config["Load Tree"])
+    # first_level = levels[0]
+    leaves = find_leaf_nodes(config["Load Tree"])
+    for leaf in leaves:
         print(f"{leaf}...   ", end="")
 
         E_max_leaf = 0
@@ -103,10 +111,9 @@ def run_model(case_study: str):
     results = []
 
     for context in context_ids:
-        # train solo su dati normal del context
-        df_train_ctx = df_train_all[(df_train_all['Context'] == context) & (df_train_all['anm'] == False)].copy()  # TODO Mantieni le anomalie
-
-        y = df_train_ctx["Energy"].values
+        # train sia su normal sia su anomalie
+        df_train_ctx = df_train_all[(df_train_all['Context'] == context)].copy()
+        y = np.log1p(df_train_ctx["Energy"].values)
         X = df_train_ctx.drop(columns=["Energy", "anm"])
         X["Status"] = X["Status"].astype(bool)
 
@@ -119,7 +126,7 @@ def run_model(case_study: str):
         y_preds_all = np.zeros_like(y)
         for train_idx, test_idx in kf.split(X):
             model.fit(X.iloc[train_idx], y[train_idx])
-            y_preds_all[test_idx] = model.predict(X.iloc[test_idx])
+            y_preds_all[test_idx] = np.expm1(model.predict(X.iloc[test_idx]))
 
         mape = mean_absolute_percentage_error(y, y_preds_all) * 100  # in %
 
@@ -153,7 +160,7 @@ def calc_temp_anm_prob(case_study: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json")) as f:
         config = json.load(f)
 
-    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity", "ctx_thermal_sens")
+    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity", "ctx_thermal_sens", "XGBoost_viz")
     os.makedirs(output_folder_viz, exist_ok=True)
     output_folder_df = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "ctx_thermal_sens")
     os.makedirs(output_folder_df, exist_ok=True)
@@ -161,7 +168,7 @@ def calc_temp_anm_prob(case_study: str):
     context_ids = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")).id.unique()
     groups = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv"), parse_dates=["timestamp"])
     cluster_cols = [col for col in groups.columns if col.startswith("Cluster_")]
-    levels = get_nodes_by_level(config["Load Tree"])
+
 
     df_path = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "df_train.csv")
     df_all = pd.read_csv(os.path.join(df_path), parse_dates=["Date"])
@@ -173,7 +180,9 @@ def calc_temp_anm_prob(case_study: str):
         print("Creating XGboost models for each context...")
         run_model(case_study)
     print("Thermal probability calculation...\n")
-    for leaf in levels[0]:
+    # levels = get_nodes_by_level(config["Load Tree"])
+    leaves = find_leaf_nodes(config["Load Tree"])
+    for leaf in leaves:
         df_leaf_all = []
         df_sens_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "daily_thermal_sens", f"segs_{leaf}.csv")
         df_sens = pd.read_csv(df_sens_path, index_col=0)
@@ -207,7 +216,7 @@ def calc_temp_anm_prob(case_study: str):
                 model = XGBRegressor()
                 model.load_model(model_path)
 
-                df["y_pred"] = model.predict(features)
+                df["y_pred"] = np.expm1(model.predict(features))
                 df["residual"] = df["Energy"] - df["y_pred"]
 
                 residuals_normal = df.loc[df["anm"] == False, "residual"]
@@ -217,7 +226,6 @@ def calc_temp_anm_prob(case_study: str):
                     emoji = "✅" if is_normal else "❌"
                 else:
                     emoji = "⚠️ dati non sufficienti per la valutazione"
-                # print(f"Residual normal distribution {emoji}")
 
                 # calcolo della probabilità di anomalia
                 sigma = df.loc[df["anm"] == False, "residual"].std()
@@ -230,37 +238,49 @@ def calc_temp_anm_prob(case_study: str):
                 df_leaf_all.append(df)
 
                 plt.figure(figsize=(10, 6))
+                plt.grid(True)
+
                 for status in [False, True]:
-                    for is_anomalous in [False, True]:
-                        mask = (df["Status"] == status) & (df["anm"] == is_anomalous)
-                        if mask.sum() == 0:
-                            continue
+                    mask = (df["Status"] == status)
+                    if mask.sum() == 0:
+                        continue
 
-                        marker = "^" if is_anomalous else "o"
-                        label = f"{'ON' if status else 'OFF'} {'anomalous' if is_anomalous else 'normal'}"
-                        cmap = plt.colormaps["Greys"] if not status else plt.colormaps["coolwarm"]
-                        norm_anm_prob = df.loc[mask, "anm_prob"]
-                        colors = cmap(norm_anm_prob)
+                    marker = "^" if not status else "o"
+                    label = f"{'OFF' if not status else 'ON'}"
+                    sc = plt.scatter(
+                        df.loc[mask, "Mean_Temp"],
+                        df.loc[mask, "Energy"],
+                        c=df.loc[mask, "anm_prob"],
+                        cmap="coolwarm",
+                        vmin=0, vmax=1,
+                        marker=marker,
+                        edgecolor="black",
+                        label=label,
+                        alpha=0.8
+                    )
 
-                        plt.scatter(
-                            df.loc[mask, "Mean_Temp"],
-                            df.loc[mask, "Energy"],
-                            c=colors,
-                            marker=marker,
-                            edgecolor="black",
-                            label=label,
-                            alpha=0.8
-                        )
+                # Colorbar con label e tick più grandi
+                cb = plt.colorbar(sc, label="Anomaly probability", shrink=0.8, aspect=20, pad=0.02)
+                cb.ax.tick_params(labelsize=12)  # dimensione dei numeri della colorbar
+                cb.set_label("Anomaly probability", fontsize=14)
+
+                # Secondo scatter
                 plt.scatter(
                     df["Mean_Temp"],
                     df["y_pred"],
-                    c='black', marker='x', label='Prediction (model)', alpha=0.6, zorder=1
+                    c='black', marker='x', label='Prediction', alpha=0.6, zorder=1
                 )
-                plt.xlabel("Temperatura [°C]")
-                plt.ylabel("Energia [kWh]")
-                plt.title(f"{leaf} - Context {context} - Cluster {cluster}")
-                plt.legend()
-                plt.grid(True)
+
+                # Etichette e titolo
+                plt.xlabel("Mean temperature in time window [°C]", fontsize=14)
+                plt.ylabel("Energy in time window [kWh]", fontsize=14)
+                plt.title(f"{leaf} - Context {context} - Cluster {cluster}", fontsize=16)
+
+                # Tick degli assi
+                plt.tick_params(axis='both', labelsize=12)
+
+                # Legenda
+                plt.legend(fontsize=12)
                 plt.tight_layout()
 
                 filename = f"{leaf}_ctx{context}_cl{cluster}.png"
@@ -274,7 +294,65 @@ def calc_temp_anm_prob(case_study: str):
         df_leaf_concat.to_csv(output_csv_path, index=True)
         print("\n")
 
+def plot_predicted_vs_actual(case_study: str):
+    output_folder = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "thermal_sensitivity", "ctx_thermal_sens", "actual_vs_pred")
+    os.makedirs(output_folder, exist_ok=True)
+
+    df_path = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "df_train.csv")
+    df_all = pd.read_csv(df_path, parse_dates=["Date"])
+    df_all.set_index("Date", inplace=True)
+    df_all = df_all[df_all["Energy"] > 0]
+
+    feature_file = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "feature_columns.json")
+    with open(feature_file) as f:
+        feature_columns = json.load(f)
+
+    model_folder = os.path.join(PROJECT_ROOT, "results", case_study, "temp_XGboost", "models")
+    context_ids = df_all["Context"].unique()
+    colors = sns.color_palette("pastel", n_colors=len(context_ids))
+
+    for idx, context in enumerate(context_ids):
+        df_ctx = df_all[df_all["Context"] == context].copy()
+        if df_ctx.empty:
+            continue
+
+        X = df_ctx[feature_columns]
+        y_true = df_ctx["Energy"].values
+
+        model = XGBRegressor()
+        model.load_model(os.path.join(model_folder, f"model_ctx{context}.json"))
+        y_pred = np.expm1(model.predict(X))
+
+        # Plot
+        plt.figure(figsize=(6, 6))
+        plt.scatter(
+            y_pred, y_true,
+            alpha=0.7,
+            color=colors[idx],
+            edgecolors='white',
+            linewidth=0.5
+        )
+
+        max_val = max(max(y_pred), max(y_true))
+        min_val = min(min(y_pred), min(y_true))
+        plt.plot([min_val, max_val], [min_val, max_val], alpha=0.6, color="black")
+
+        plt.xlabel("Predicted energy [kWh]", fontsize=14)
+        plt.ylabel("Actual energy [kWh]", fontsize=14)
+        plt.title(f"Context {context} XGBoost model", fontsize=16)
+        plt.tick_params(axis='both', labelsize=12)
+        plt.grid(True, linewidth=0.5, alpha=0.4)
+        plt.tight_layout()
+
+        outpath = os.path.join(output_folder, f"ctx{context}.png")
+        plt.savefig(outpath, dpi=150)
+        plt.close()
+
+
+
 if __name__ == "__main__":
-    # run_dataset("Cabina")
-    # run_model("Cabina")
-    calc_temp_anm_prob("Cabina")
+    case_study = "Total_cut"
+    # run_dataset(case_study)
+    # run_model(case_study)
+    calc_temp_anm_prob(case_study)
+    # plot_predicted_vs_actual(case_study)

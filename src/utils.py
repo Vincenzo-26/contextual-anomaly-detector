@@ -22,7 +22,6 @@ def print_boxed_title(title: str, side_padding: int = 15):
     print(f"{spaces}{title}{spaces}")
     print(f"{border}\n")
 
-
 def clean_time_series(df: pd.DataFrame, unit: str = None) -> tuple[pd.DataFrame, dict]:
     """
     Esegue il preprocessing di una serie temporale con frequenza a 15 minuti, contenente le colonne 'timestamp' e 'value'.
@@ -91,12 +90,19 @@ def clean_time_series(df: pd.DataFrame, unit: str = None) -> tuple[pd.DataFrame,
     stats = {'complete': 0, 'interpolated': 0, 'removed': 0, 'knn': 0}
 
     full_hours = pd.date_range("00:00", "23:45", freq="15min").time
-    for day in df.index.normalize().unique():
+    all_days = pd.date_range(df.index.min().normalize(), df.index.max().normalize(), freq='D')
+
+    for day in all_days:
         expected_index = pd.date_range(start=day, end=day + pd.Timedelta("23:45:00"), freq="15min")
         daily = df.reindex(expected_index)
 
+        # 🔹 Giorno completamente mancante: tutti i valori sono NaN
+        if daily['value'].isnull().all():
+            stats['removed'] += 1
+            continue
+
+        # 🔹 Giorno completo: nessun NaN
         if daily['value'].isnull().sum() == 0:
-            # Giorno completo
             daily['date'] = daily.index.date
             daily['hour'] = daily.index.time
             profile = daily.pivot(index='date', columns='hour', values='value')
@@ -105,6 +111,7 @@ def clean_time_series(df: pd.DataFrame, unit: str = None) -> tuple[pd.DataFrame,
             stats['complete'] += 1
             continue
 
+        # 🔹 Verifica gruppo di NaN
         nan_groups = get_nan_groups(daily['value'])
         max_gap = max([(end - start + 1) for start, end in nan_groups], default=0)
 
@@ -112,8 +119,8 @@ def clean_time_series(df: pd.DataFrame, unit: str = None) -> tuple[pd.DataFrame,
             stats['removed'] += 1
             continue
 
-        if all((end - start + 1) <= 4 for start, end in nan_groups):
-            daily['value'] = interpolate_short_gaps(daily['value'], max_missing=(hour_to_interp*4))
+        if all((end - start + 1) <= hour_to_interp * 4 for start, end in nan_groups):
+            daily['value'] = interpolate_short_gaps(daily['value'], max_missing=(hour_to_interp * 4))
             if daily['value'].isnull().sum() == 0:
                 daily['date'] = daily.index.date
                 daily['hour'] = daily.index.time
@@ -121,8 +128,10 @@ def clean_time_series(df: pd.DataFrame, unit: str = None) -> tuple[pd.DataFrame,
                 training_profiles.append(profile)
                 output_days.append(daily[['value']])
                 stats['interpolated'] += 1
-        else:
-            to_impute_profiles.append((day, daily))
+                continue
+
+        # 🔹 Ricostruzione KNN richiesta
+        to_impute_profiles.append((day, daily))
 
     # Addestramento KNN
     if training_profiles:
@@ -162,10 +171,24 @@ def clean_time_series(df: pd.DataFrame, unit: str = None) -> tuple[pd.DataFrame,
     df_cleaned = df_cleaned[['value']].reset_index()
     df_cleaned.columns = ['timestamp', 'value']
 
-    print(f"Whole days: {stats['complete']}")
-    print(f"Interpolated days (nan gap <= {hour_to_interp}h): {stats['interpolated']}")
-    print(f"Rebuilt days (4h < nan gap <= {hour_to_remove}h): {stats['knn']}")
-    print(f"Removed days (nan gap > {hour_to_remove}h): {stats['removed']}")
+
+    start_date = df.index.min().date()
+    end_date = df.index.max().date()
+    total_days = (end_date - start_date).days + 1
+    stats["summary"] = {
+        "range": f"{start_date}–{end_date}",
+        "total_days": total_days
+    }
+    counted = stats['complete'] + stats['interpolated'] + stats['knn'] + stats['removed']
+    if counted != total_days:
+        print(f"⚠️ Warning: {total_days - counted} days unaccounted for (should be zero).")
+
+    print(f"Data available from: {start_date} to: {end_date} ({total_days} days)")
+    print(f"    - {stats['complete']} whole days")
+    print(f"    - {stats['interpolated']} interpolated days (nan gap ≤ {hour_to_interp}h)")
+    print(f"    - {stats['knn']} rebuilt days (1h < nan gap ≤ {hour_to_remove}h)")
+    print(f"    - {stats['removed']} removed days (nan gap > {hour_to_remove}h or failed reconstruction)")
+
     date_complete = pd.to_datetime(pd.concat(training_profiles).index.get_level_values(0).unique()) if training_profiles else []
     date_interpolated = [df.index[0].date() for df in output_days[len(date_complete):len(date_complete) + stats['interpolated']]]
     date_knn = [df.index[0].date() for df in output_days[len(date_complete) + stats['interpolated']:]]
@@ -204,13 +227,11 @@ def find_leaf_nodes(subtree: dict) -> list:
             else:
                 # Ricorsione nei figli
                 leaf_nodes.extend(find_leaf_nodes(value))
-
     return leaf_nodes
 
-def merge_anomaly_tables(sottocarico: str):
-    anomaly_folder = os.path.join(PROJECT_ROOT, "results", sottocarico, "anomaly_table")
+def merge_anomaly_tables(case_study: str):
+    anomaly_folder = os.path.join(PROJECT_ROOT, "results", case_study, "anomaly_table")
     merged = None
-
     for file in os.listdir(anomaly_folder):
         if file.endswith(".csv") and file.startswith("anomaly_table_"):
             file_path = os.path.join(anomaly_folder, file)
@@ -233,7 +254,7 @@ def merge_anomaly_tables(sottocarico: str):
         output_path = os.path.join(anomaly_folder, "anomaly_table_overall.csv")
         merged.to_csv(output_path, index=False)
     else:
-        print(f"⚠️ No files for {sottocarico}\n")
+        print(f"⚠️ No files for {case_study}\n")
     return merged
 
 def run_energy_in_tw(case_study: str, sottocarico: str):
@@ -261,7 +282,7 @@ def run_energy_in_tw(case_study: str, sottocarico: str):
     # Preprocess
     data["date"] = data["timestamp"].dt.date
     data["time"] = data["timestamp"].dt.time
-    data["energy_Wh"] = data["value"] * 0.25 / 1000
+    data["energy_Wh"] = data["value"] * 0.25
     df_groups["date"] = df_groups["timestamp"].dt.date
 
     # Join temperatura
@@ -369,7 +390,7 @@ def run_energy_temp(case_study: str, sottocarico: str, context: int, cluster: in
             continue
         daily_profiles.append({
             "Date": date,
-            "Energy": day_df["Power"].sum() * 0.25 / 1000,
+            "Energy": day_df["Power"].sum() * 0.25,
             "Mean_Temp": np.mean(day_df["Temperatura Esterna"]),
             "Weekday": pd.Timestamp(date).weekday(),
             "Month": pd.Timestamp(date).month,
@@ -499,15 +520,6 @@ def get_nodes_by_level(load_tree: dict) -> list[list[str]]:
 
     max_level = max(levels_dict.keys())
     return [levels_dict[i] for i in reversed(range(max_level + 1))]  # bottom-up
-
-def build_child_map(tree: dict) -> dict[str, list[str]]:
-    child_map = {}
-    def recurse(subtree):
-        for parent, children in subtree.items():
-            child_map[parent] = list(children.keys())
-            recurse(children)
-    recurse(tree)
-    return child_map
 
 def scale_data(X, method):
     if method is False:

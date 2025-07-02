@@ -1,5 +1,9 @@
-from utils import *
 import json
+import os
+import pandas as pd
+
+from utils import print_boxed_title, find_leaf_nodes
+from settings import PROJECT_ROOT
 
 
 def tempered_soft_or(row):
@@ -27,8 +31,7 @@ def combine_soft_evidence(case_study: str):
         print(f"[{foglia}] Processing...    ", end="")
 
         df_energy = pd.read_csv(os.path.join(energy_folder_path, f"evd_{foglia}.csv"))
-        # todo: check incrociato probabilità di anomalia
-        temp_path = os.path.join(temp_folder_path, "ctx_thermal_sens_xgboost", f"{foglia}.csv")
+        temp_path = os.path.join(temp_folder_path, "ctx_thermal_sens", f"{foglia}.csv")
 
         if not os.path.exists(temp_path):
             df_energy["thermal_sensitive"] = False
@@ -59,7 +62,7 @@ def combine_soft_evidence(case_study: str):
     print("\nAnomaly probabilities calculated ✅     -> ready for bayesian inference\n\n")
 
 if __name__ == "__main__":
-    combine_soft_evidence("Cabina")
+    combine_soft_evidence("Total_cut")
 
 
 
