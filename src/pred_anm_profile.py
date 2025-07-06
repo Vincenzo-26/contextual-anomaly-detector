@@ -4,13 +4,12 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import xgboost as xgb
-import seaborn as sns
 
 from xgboost import XGBRegressor, Booster
-from sklearn.model_selection import cross_val_score, KFold
-from sklearn.metrics import mean_absolute_percentage_error, mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import KFold
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from src.utils import run_energy_temp, run_energy_temp_profile, get_nodes_by_level
+from src.utils import run_energy_temp, run_energy_temp_profile, get_nodes_by_level, assign_values_by_depth, find_leaf_nodes
 from settings import PROJECT_ROOT
 
 def run_dataset(case_study: str):
@@ -31,12 +30,14 @@ def run_dataset(case_study: str):
     groups["date"] = groups["timestamp"].dt.date
     time_windows_df = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv"))
 
+    soglie_per_leaf = assign_values_by_depth(config["Load Tree"])
+
     levels = get_nodes_by_level(config["Load Tree"])
     all_nodes = [node for level in levels for node in level]
     for leaf in all_nodes:
-        print(f"{leaf}...   ", end="")
+        soglia_split = soglie_per_leaf.get(leaf)
+        print(f"{leaf} (train-val split threshold {soglia_split*100}%)...   ", end="")
 
-        # Calcola la soglia come il 10% del massimo consumo mediato sul numero di quarti d'ora del contesto tra tutti i context e cluster.
         soglia_en_max = 0.10
         E_max_leaf = 0
         for context in time_windows_df.id.unique():
@@ -45,42 +46,50 @@ def run_dataset(case_study: str):
                 cluster = int(cluster_col.split("_")[-1])
                 df_normals, _ = run_energy_temp(case_study, leaf, context, cluster)
                 max_energy = df_normals["Energy"].max(skipna=True)
-                avg_energy = max_energy / obs
+                avg_energy = max_energy / obs if obs > 0 else 0
                 E_max_leaf = max(E_max_leaf, avg_energy)
         energy_cutoff = soglia_en_max * E_max_leaf
 
-        df_all_normal = []
-        df_all_anomalous = []
+        df_all = []
         for context in time_windows_df.id.unique():
             for cluster_col in [col for col in groups.columns if col.startswith("Cluster_")]:
                 cluster = int(cluster_col.split("_")[-1])
                 df_normal, df_anomalous = run_energy_temp_profile(case_study, leaf, context, cluster)
-                df_normal["Status"] = df_normal["Energy"] >= energy_cutoff
-                df_all_normal.append(df_normal)
+                combined = pd.concat([df_normal, df_anomalous], ignore_index=True)
+                if not combined.empty:
+                    df_all.append(combined)
 
-                if df_anomalous is not None and not df_anomalous.empty:
-                    df_anomalous["Status"] = df_anomalous["Energy"] >= energy_cutoff
-                    df_all_anomalous.append(df_anomalous)
+        df_all_combined = pd.concat(df_all, ignore_index=True)
+        df_all_combined["Status"] = df_all_combined["Energy"] >= energy_cutoff
+        inference_df["Date"] = pd.to_datetime(inference_df["Date"])
+        df_all_combined["Date"] = pd.to_datetime(df_all_combined["Date"])
 
-        df_all_normal = pd.concat(df_all_normal, ignore_index=False)
-        df_all_anomalous = pd.concat(df_all_anomalous, ignore_index=False)
+        inference_df["Date"] = pd.to_datetime(inference_df["Date"])
+        merge_cols = ["Date", "Context"]
+        use_cols = merge_cols + ["P(Total=1)"]
 
-        probs_df = inference_df[["Date", "Context", f'P({leaf}=1)']].copy()
-        probs_df.columns = ["Date", "Context", "anm_BN"]
-        probs_df["Date"] = pd.to_datetime(probs_df["Date"])
+        leaf_col = f"P({leaf}=1)"
+        if leaf_col in inference_df.columns:
+            if not inference_df["P(Total=1)"].equals(inference_df[leaf_col]):
+                use_cols.append(leaf_col)
 
-        df_train_norm = df_all_normal.merge(probs_df, how="left", on=["Date", "Context"])
-        df_train_norm.set_index("Date", inplace=True)
+        df_all_combined = df_all_combined.merge(
+            inference_df[use_cols],
+            how="left",
+            on=merge_cols
+        )
 
-        df_val_anm = pd.DataFrame()
-        if df_all_anomalous is not None and not df_all_anomalous.empty:
-            df_val_anm = df_all_anomalous.merge(probs_df, how="left", on=["Date", "Context"])
-            df_val_anm.set_index("Date", inplace=True)
+        df_train = df_all_combined[df_all_combined[f"P({leaf}=1)"] < soglia_split].copy()
+        df_val = df_all_combined[df_all_combined[f"P({leaf}=1)"] >= soglia_split].copy()
 
-        df_train_norm.to_csv(os.path.join(output_dir_train, f"df_train_{leaf}.csv"))
-        if not df_val_anm.empty:
-            df_val_anm.to_csv(os.path.join(output_dir_val, f"df_val_{leaf}.csv"))
-        print(f"ok")
+        df_train.set_index("Date", inplace=True)
+        df_val.set_index("Date", inplace=True)
+
+        df_train.to_csv(os.path.join(output_dir_train, f"df_train_{leaf}.csv"))
+        if not df_val.empty:
+            df_val.to_csv(os.path.join(output_dir_val, f"df_val_{leaf}.csv"))
+
+        print("ok")
     return
 
 
@@ -98,7 +107,9 @@ def run_model(case_study: str):
         config = json.load(f)
     train_dir = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "train_df")
     model_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "models")
+    output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "benchmarking")
     os.makedirs(model_path, exist_ok=True)
+    os.makedirs(output_folder_viz, exist_ok=True)
 
     metrics_results = []
     scaling_info = []
@@ -116,7 +127,10 @@ def run_model(case_study: str):
         y_raw = df_train["Energy"].values
         y, y_min, y_max = min_max_scaling(y_raw)
         scaling_info.append({"Load": leaf, "Energy_min": y_min, "Energy_max": y_max})
-        X = df_train.drop(columns=["Energy", "anm", "anm_BN"])
+        if leaf == "Total":
+            X = df_train.drop(columns=["Energy", "anm", "P(Total=1)"])
+        else:
+            X = df_train.drop(columns=["Energy", "anm", "P(Total=1)", f"P({leaf}=1)"])
         X["Status"] = X["Status"].astype(bool)
 
         model = XGBRegressor(objective="reg:squarederror", n_estimators=100, random_state=42)
@@ -138,43 +152,62 @@ def run_model(case_study: str):
             mae_scores.append(mean_absolute_error(y_true_rescaled, preds_rescaled))
             rmse_scores.append(np.sqrt(mean_squared_error(y_true_rescaled, preds_rescaled)))
             r2_scores.append(r2_score(y_true_rescaled, preds_rescaled))
-
         metrics_results.append({
             "Load": leaf,
             "MAE [kWh]": np.mean(mae_scores),
             "RMSE [kWh]": np.mean(rmse_scores),
             "R² [-]": np.mean(r2_scores),
-            # "MAPE [%]": mape
         })
+
+        #PLOT ACT VS PRED
+        y_pred_rescaled = min_max_scaling(y_preds_all, reverse=True, min_val=y_min, max_val=y_max)
+        y_true_rescaled = min_max_scaling(y, reverse=True, min_val=y_min, max_val=y_max)
+        color_map = plt.colormaps["tab20"].resampled(len(all_nodes))
+        leaf_idx = all_nodes.index(leaf)
+        leaf_color = color_map(leaf_idx)
+        plt.figure(figsize=(6, 6))
+        plt.grid(True, linewidth=0.5, alpha=0.4)
+        plt.scatter(
+            y_pred_rescaled,
+            y_true_rescaled,
+            color=leaf_color,
+            edgecolor="white",
+            alpha=0.7,
+            linewidth=0.5
+        )
+        max_val = max(max(y_pred_rescaled), max(y_true_rescaled)) * 1.1
+        plt.plot([0, max_val], [0, max_val], linestyle="--", color="black", alpha=0.6)
+        plt.xlabel("Actual Energy [kWh]", fontsize=16)
+        plt.ylabel("Predicted Energy [kWh]", fontsize=16)
+        plt.title(f"{leaf}", fontsize=20)
+        plt.tick_params(axis='both', labelsize=14)
+        plt.tight_layout()
+        save_path = os.path.join(output_folder_viz, f"actual_vs_pred_{leaf}.png")
+        plt.savefig(save_path)
+        plt.close()
 
         print(f"[{leaf}]  MAE: {np.mean(mae_scores):.2f} kWh  "
               f"RMSE: {np.mean(rmse_scores):.2f} kWh  "
               f"R²: {np.mean(r2_scores):.2f}", end="")
-              # f"MAPE: {mape:.2f}%   -   ", end="")
 
         model.fit(X, y)
         model.save_model(os.path.join(model_path, f"model_{leaf}.json"))
 
-        print("Model saved ✅")
+        print("    Model saved ✅")
 
     df_all_results = pd.DataFrame(metrics_results)
     df_all_results.to_csv(os.path.join(model_path, "metrics.csv"), index=False)
     df_scaling = pd.DataFrame(scaling_info)
     df_scaling.to_csv(os.path.join(model_path, "scaling_minmax_info.csv"), index=False)
-    print("\n📊 metrics.csv saved.")
+    print(f"\n📊 metrics.csv saved")
     print("📉 energy_min_max.csv salvato correttamente.")
 
 
-
-def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: str, plot_pred: bool):
-    print(f"Predicting energy profile (kWh) for:\n{case_study} - {leaf} - {date} - ctx{context}\n")
+def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: str, plot: bool, plot_pred: bool, plot_fill: bool, plot_temp: bool):
+    print(f"Predicting energy profile (kWh) for:{case_study} - {leaf} - {date} - ctx{context}")
 
     output_folder_viz = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "Pred_XGboost")
     os.makedirs(output_folder_viz, exist_ok=True)
-
-    df_val_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "val_df", f"df_val_{leaf}.csv")
-    df_val = pd.read_csv(os.path.join(df_val_path), parse_dates=["Date"])
-    df_val.set_index('Date', inplace=True)
 
     df_train_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "train_df", f"df_train_{leaf}.csv")
     df_train = pd.read_csv(os.path.join(df_train_path), parse_dates=["Date"])
@@ -182,6 +215,8 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
 
     scaling_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "models", "scaling_minmax_info.csv")
     df_scaling = pd.read_csv(scaling_path)
+
+
     row_scaling = df_scaling[df_scaling["Load"] == leaf]
     if row_scaling.empty:
         print(f"⚠️ Nessun valore di scaling trovato per {leaf}")
@@ -194,6 +229,9 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
     model.load_model(model_path)
 
     if which_df == "test":
+        df_val_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "val_df", f"df_val_{leaf}.csv")
+        df_val = pd.read_csv(os.path.join(df_val_path), parse_dates=["Date"])
+        df_val.set_index('Date', inplace=True)
         df_day_ctx = df_val[(df_val.index.date == pd.to_datetime(date).date()) & (df_val["Context"] == context)].copy()
     elif which_df == "train":
         df_day_ctx = df_train[(df_train.index.date == pd.to_datetime(date).date()) & (df_train["Context"] == context)].copy()
@@ -206,7 +244,10 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
     pred_profile = []
     real_profile = []
     for _, row in df_day_ctx.iterrows():
-        row_input = row.drop(labels=["Energy", "anm","anm_BN"], errors="ignore").to_frame().T
+        if leaf == "Total":
+            row_input = row.drop(labels=["Energy", "anm", "P(Total=1)"], errors="ignore").to_frame().T
+        else:
+            row_input = row.drop(labels=["Energy", "anm", "P(Total=1)", f"P({leaf}=1)"], errors="ignore").to_frame().T
         row_input = row_input.apply(pd.to_numeric, errors="coerce")
         if "Status" in row_input.columns:
             row_input["Status"] = row_input["Status"].astype(bool)
@@ -230,9 +271,9 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
     real_total = round(sum(real_profile), 2)
     pred_total = round(sum(pred_profile), 2)
 
-    print(f"\nCMP   -> Anomaly? {df_day_ctx['anm'].iloc[0]}")
-    print(f"BN prob    -> {df_day_ctx['anm_BN'].iloc[0] * 100:.2f}%")
-    print(f"\nActual total energy: {real_total} kWh")
+    print(f"CMP   -> Anomaly? {df_day_ctx['anm'].iloc[0]}")
+    print(f"BN prob    -> {df_day_ctx['P(Total=1)'].iloc[0] * 100:.2f}%")
+    print(f"Actual total energy: {real_total} kWh")
     print(f"Predicted total energy: {pred_total} kWh")
     print(f"Wasted energy: {difference} kWh ♻️")
 
@@ -251,128 +292,161 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
                 alpha=0.3,
                 linewidth=0.6
             )
-
     x_labels = [f"{h:02d}:{m * 15:02d}" for h, m in zip(df_day_ctx["ora"], df_day_ctx["quartodora"])]
-    plt.plot(x_labels, real_profile, label="Actual", color="#4682B4", marker="o", markersize=5, linewidth=1.5)
-    if plot_pred:
-        plt.plot(x_labels, pred_profile, label="Predicted", color="#CD5C5C", marker="o", markersize=5, linewidth=1.5)
+    x = np.arange(len(x_labels))
+    real_array = np.array(real_profile)
+    pred_array = np.array(pred_profile)
+    # plt.plot(x, real_array, label="Actual", color="#4682B4", marker="o", markersize=5, linewidth=1.5)
+    plt.plot(x, real_array, color="#4682B4", marker="o", markersize=5, linewidth=1.5)
 
-    plt.title(f"{leaf} - {date} - ctx{context}", fontsize=18)
+    if plot_pred:
+        plt.plot(x, pred_array, label="Predicted", color="#CD5C5C", marker="o", markersize=5, linewidth=1.5)
+
+        if plot_fill:
+            mask = real_array > pred_array
+            plt.fill_between(x, pred_array, real_array, where=mask, interpolate=True,
+                             color="orange", alpha=0.4, label=f"Wasted Energy ({difference} kWh)")
+    plt.title(f"{leaf} - {date} - Context {context}", fontsize=18)
     plt.ylabel("Energy [kWh]", fontsize=14)
 
     step = 2
-    tick_positions = list(range(0, len(x_labels), step))
-    plt.xticks(ticks=tick_positions, labels=[x_labels[i] for i in tick_positions], rotation=45)
+    plt.xticks(ticks=x[::step], labels=[x_labels[i] for i in x[::step]], rotation=45)
     plt.tick_params(axis='both', labelsize=14)
-    plt.legend(fontsize=14)
+    # plt.legend(fontsize=14)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.show()
+    if plot:
+        plt.show()
+
+    if plot_temp:
+        temp_path = os.path.join(PROJECT_ROOT, "data", case_study, "Temperatura Esterna.csv")
+        df_temp = pd.read_csv(temp_path)
+        df_temp["timestamp"] = pd.to_datetime(df_temp["timestamp"])
+        df_temp["date"] = df_temp["timestamp"].dt.date
+        df_temp["time"] = df_temp["timestamp"].dt.time
+
+        cluster_df = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "groups.csv"))
+        tw_df = pd.read_csv(os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv"))
+
+        cluster_df["timestamp"] = pd.to_datetime(cluster_df["timestamp"])
+        cluster_df["date"] = cluster_df["timestamp"].dt.date
+
+        cluster_cols = [col for col in cluster_df.columns if col.startswith("Cluster_")]
+        cluster_df["Cluster"] = cluster_df[cluster_cols].idxmax(axis=1).str.extract(r"(\d+)").astype(int)
+        cluster_map = cluster_df.set_index("date")["Cluster"].to_dict()
+        df_temp["Cluster"] = df_temp["date"].map(cluster_map)
+        df_temp["Cluster"] = df_temp["Cluster"].astype("Int64")
+
+        tw_df["to"] = tw_df["to"].replace("24:00", "23:59")
+        tw_df["from"] = pd.to_datetime(tw_df["from"], format="%H:%M").dt.time
+        tw_df["to"] = pd.to_datetime(tw_df["to"], format="%H:%M").dt.time
+
+        def assign_context(row):
+            for _, tw_row in tw_df.iterrows():
+                from_time = tw_row["from"]
+                to_time = tw_row["to"]
+                if from_time <= row["time"] < to_time or (
+                        from_time > to_time and (row["time"] >= from_time or row["time"] < to_time)):
+                    return tw_row["id"]
+            return None
+
+        df_temp["Context"] = df_temp.apply(assign_context, axis=1)
+
+        clt = int(row_input["Cluster"].iloc[0])
+        df_temp_ctx = df_temp[(df_temp["Context"] == context) & (df_temp["Cluster"] == clt)].copy()
+
+        pivot_temp = df_temp_ctx.pivot(index="date", columns="time", values="value")
+        pivot_temp = pivot_temp.sort_index(axis=1)
+        time_labels = [t.strftime("%H:%M") for t in pivot_temp.columns]
+
+        plt.figure(figsize=(10, 6))
+        for d in pivot_temp.index:
+            y_vals = pivot_temp.loc[d]
+            if d == pd.to_datetime(date).date():
+                plt.plot(time_labels, y_vals, color="orange", linewidth=1.5, marker="o", markersize=5)
+            else:
+                plt.plot(time_labels, y_vals, color="gray", alpha=0.3, linewidth=0.8)
+
+        plt.title(f"Outdoor Temperature - {date} - Context {context}", fontsize=18)
+        plt.ylabel("Temperature [°C]", fontsize=14)
+        plt.xticks(ticks=np.arange(0, len(time_labels), 2), labels=time_labels[::2], rotation=45)
+        plt.tick_params(axis='both', labelsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+
     return difference
 
-
-def calc_wasted_energy(case_study: str, threshold: float, which_df: str):
+def calc_wasted_energy(case_study: str, method: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
-    test_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "test_df")
-    train_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "train_df")
+    wasted_dir = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost")
+    df_val_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "val_df")
+    df_train_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "train_df")
+    anm_table_path = os.path.join(PROJECT_ROOT, "results", case_study, "anomaly_table")
 
-    total_wasted_cmp = 0
-    total_wasted_bn = 0
-    count_cmp = 0
-    count_bn = 0
+    df_val_total = pd.read_csv(os.path.join(df_val_path, f"df_val_Total.csv")) #già è filtrato con P(total=1)>0.3
+    anm_table_total = pd.read_csv(os.path.join(anm_table_path, f"anomaly_table_Total.csv"))
 
-    levels = get_nodes_by_level(config["Load Tree"])
-    first_level = levels[0]
+    if method == "BN":
+        print("Energy waste with Bayesian Network")
+        combs = df_val_total[["Date", "Context"]].drop_duplicates()
+        combs = [tuple(x) for x in combs.to_numpy()]
+    elif method == "CMP":
+        print("Energy waste with CMP")
+        combs = anm_table_total[["Date", "Context"]].drop_duplicates()
+        combs = [tuple(x) for x in combs.to_numpy()]
 
-    def run_profile1(model, date: str, context: int, df: pd.DataFrame):
-        df_day_ctx = df[(df.index.date == pd.to_datetime(date).date()) & (df["Context"] == context)].copy()
-        if df_day_ctx.empty:
-            print(f"⚠️ No data in {date} - ctx{context}")
-            return None
-        df_day_ctx = df_day_ctx.sort_values(by=["ora", "quartodora"])
+    wasted_results = []
+    total_waste = 0
 
-        pred_profile = []
-        real_profile = []
-        for _, row in df_day_ctx.iterrows():
-            row_input = row.drop(labels=["Energy", "anm", "anm_BN"], errors="ignore").to_frame().T
-            row_input = row_input.apply(pd.to_numeric, errors="coerce")
-            if "Status" in row_input.columns:
-                row_input["Status"] = row_input["Status"].astype(bool)
+    leaves = find_leaf_nodes(config["Load Tree"])
+    for leaf in leaves:
+        print(f"\n🔍 Processing leaf: {leaf}")
+        waste_leaf = 0
 
-            dmatrix = xgb.DMatrix(row_input)
-            pred = model.predict(dmatrix)[0]
+        df_leaf_train = pd.read_csv(os.path.join(df_train_path, f"df_train_{leaf}.csv"))
+        val_file = os.path.join(df_val_path, f"df_val_{leaf}.csv")
+        if not os.path.exists(val_file):
+            print(f"⚠️ No anomalies for leaf: {leaf}")
+            continue
+        df_leaf_val = pd.read_csv(val_file)
 
-            pred_profile.append(round(pred, 3))
-            real_profile.append(round(row["Energy"], 3))
+        for date, context in combs:
+            in_val = not df_leaf_val[(df_leaf_val["Date"] == date) & (df_leaf_val["Context"] == context)].empty
+            in_train = not df_leaf_train[(df_leaf_train["Date"] == date) & (df_leaf_train["Context"] == context)].empty
 
-        # print(f"📈 Real profile (kWh): {real_profile}")
-        # print(f"Predicted profile (kWh): {pred_profile}")
+            if in_val:
+                which_df = "test"
+            elif in_train:
+                which_df = "train"
+            else:
+                continue # caso in cui in quel carico la combinazione Date-Context non ha dati
+            waste = run_profile(case_study, leaf, date, context, which_df, False, False, False)
+            print("\n")
+            if waste is not None:
+                waste_leaf += waste
+                total_waste += waste
 
-        real_total = round(sum(real_profile), 2)
-        pred_total = round(sum(pred_profile), 2)
-        difference = round(real_total - pred_total, 2)
-        print(f"CMP   -> Anomaly? {row["anm"]}")
-        print(f"BN prob    -> {row["anm_BN"] * 100:.2f}%")
-        print(f"Actual total energy: {real_total} kWh")
-        print(f"Predicted total energy: {pred_total} kWh")
-        if difference > 0:
-            print(f"Wasted energy: {difference} kWh 🗑️\n")
-        else:
-            print(f"Saved energy: {difference} kWh ♻️\n")
-        return difference
+        wasted_results.append((leaf, round(waste_leaf, 2)))
+    df_result = pd.DataFrame(wasted_results, columns=["Load", "Wasted energy [kWh]"])
+    df_result["%"] = df_result["Wasted energy [kWh]"] / total_waste * 100
+    df_result["%"] = df_result["%"].round(2)
 
-    for leaf in first_level:
-
-        model_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "models", f"model_{leaf}.json")
-        model = Booster()
-        model.load_model(model_path)
-
-        if which_df == "test":
-            df = pd.read_csv(os.path.join(test_path, f"df_test_{leaf}.csv"), parse_dates=["Date"])
-        elif which_df == "train":
-            df = pd.read_csv(os.path.join(train_path, f"df_train_{leaf}.csv"), parse_dates=["Date"])
-
-        # df = df[(df["mese"] <= 12) & (df["mese"] >= 10)]
-
-        df.set_index('Date', inplace=True)
-        df_cmp = df[df["anm"] == True]
-        df_bn = df[df["anm_BN"] > threshold]
-
-        # --- CMP ---
-        for (date, context), _ in df_cmp.groupby(["Date", "Context"]):
-            print(f"\nCMP - {leaf} - {date} - ctx{context}")
-            waste = run_profile1(model, str(pd.to_datetime(date).date()), int(context), df_cmp)
-            total_wasted_cmp += waste
-            count_cmp += 1
-
-        # --- BN ---
-        for (date, context), _ in df_bn.groupby(["Date", "Context"]):
-            print(f"\nBN - {leaf} - {date} - ctx{context}")
-            waste = run_profile1(model, str(pd.to_datetime(date).date()), int(context), df_bn)
-            total_wasted_bn += waste
-            count_bn += 1
-
-    results = pd.DataFrame({
-        "Combinazioni Anomale": [count_cmp, count_bn],
-        "Energia Persa [kWh]": [round(total_wasted_cmp, 2), round(total_wasted_bn, 2)]
-    }, index=["CMP", "BN"])
-    # all_dates = pd.concat([df_cmp["Date"], df_bn["Date"]], ignore_index=True)
-    # min_date = pd.to_datetime(all_dates.min()).strftime("%Y-%m-%d")
-    # max_date = pd.to_datetime(all_dates.max()).strftime("%Y-%m-%d")
-    # print(f"\n📊 Results for [{min_date} - {max_date}]")
-    print(f"\n📊 Results:")
-    print(results)
-
-
+    save_path = os.path.join(wasted_dir, f"wasted_energy_summary_{method}.csv")
+    df_result.to_csv(save_path, index=False)
+    print(f"\n✅ Saved summary to: {save_path}")
+    print(f"\n✅ Total wasted energy: {total_waste}")
 
 
 if __name__ == "__main__":
     case_study = "Total_cut"
     # run_dataset(case_study)
     # run_model(case_study)
-    run_profile(case_study, "GF3", "2024-07-28", 4, "test", True)
-    # calc_wasted_energy(case_study, 0.8)
+    run_profile(case_study, "GF4", "2024-08-04", 1, "train",
+                True,
+                False,
+                True,
+                True)
+    # calc_wasted_energy(case_study, "CMP")
 
-
-    # "2024-08-20", 1 buono per anomalia esagerata

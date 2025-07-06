@@ -11,8 +11,16 @@ def plot_inference_result(case_study, date, context):
 
     config_path = os.path.join(PROJECT_ROOT, "data", case_study, "config.json")
     results_path = os.path.join(PROJECT_ROOT, "results", case_study, "inference_results.csv")
-    soft_evidence_dir = os.path.join(PROJECT_ROOT, "results", case_study, "soft_evidences")
     time_window_path = os.path.join(PROJECT_ROOT, "results", case_study, "time_windows.csv")
+
+    ctx_thermal_sens_path = os.path.join(PROJECT_ROOT, "results", case_study, "thermal_sensitivity", "ctx_thermal_sens")
+
+    # Carichi thermal sensitive da nome dei file
+    thermal_sensitive_nodes = {
+        os.path.splitext(f)[0]
+        for f in os.listdir(ctx_thermal_sens_path)
+        if f.endswith(".csv")
+    }
 
     df_descr = pd.read_csv(time_window_path)
     context_description = df_descr[df_descr["id"] == int(context)].iloc[0]["description"]
@@ -30,14 +38,14 @@ def plot_inference_result(case_study, date, context):
     levels = get_nodes_by_level(tree)[::-1]
     foglie = find_leaf_nodes(tree)
 
-    x_pos_counter = [0]
+    x_pos_counter = [1]
     positions = {}
 
     def assign_positions(node, depth=0):
         children = get_children_of_node(tree, node)
         if not children:
             x = x_pos_counter[0]
-            positions[node] = (x, -depth * y_spacing)
+            positions[node] = (x, -depth * y_spacing + 1)
             x_pos_counter[0] += 1
         else:
             for child in children:
@@ -51,84 +59,82 @@ def plot_inference_result(case_study, date, context):
 
     fig = go.Figure()
 
+    # Dummy legends
     fig.add_trace(go.Scatter(
-        x=[None], y=[None],
-        mode="markers",
-        marker=dict(color="green", size=10),
-        name="Thermal sensitive",
-        showlegend=True,
-        hoverinfo="skip"
+        x=[None], y=[None], mode="markers", marker=dict(color="green", size=10),
+        name="Thermal sensitive", showlegend=True, hoverinfo="skip"
     ))
     fig.add_trace(go.Scatter(
-        x=[None], y=[None],
-        mode="markers",
-        marker=dict(color="red", size=10),
-        name="Non thermal sensitive",
-        showlegend=True,
-        hoverinfo="skip"
+        x=[None], y=[None], mode="markers", marker=dict(color="red", size=10),
+        name="Non thermal sensitive", showlegend=True, hoverinfo="skip"
     ))
 
+    # Bar plot + node label
     for node, (x, y) in positions.items():
         p0 = row.get(f"P({node}=0)", None)
         p1 = row.get(f"P({node}=1)", None)
         if p0 is not None and p1 is not None:
             tooltip = (
-                f"<b>{node}</b><br>"
-                f"P({node}=0): {p0:.3f}<br>"
-                f"P({node}=1): {p1:.3f}<extra></extra>"
+                f"P({node}=0): {p0:.2f}<br>"
+                f"P({node}=1): {p1:.2f}<extra></extra>"
             )
             fig.add_trace(go.Bar(
                 x=[x - 0.1], y=[p0 * bar_height_scale],
                 width=bar_width, base=y,
-                marker_color="steelblue",
-                hovertemplate=tooltip,
-                showlegend=False
+                marker_color="steelblue", hovertemplate=tooltip, showlegend=False
             ))
             fig.add_trace(go.Bar(
                 x=[x + 0.1], y=[p1 * bar_height_scale],
                 width=bar_width, base=y,
-                marker_color="crimson",
-                hovertemplate=tooltip,
-                showlegend=False
+                marker_color="crimson", hovertemplate=tooltip, showlegend=False
             ))
             fig.add_trace(go.Scatter(
-                x=[x], y=[y + label_offset],
-                text=[node], mode="text",
-                showlegend=False, hoverinfo="skip"
+                x=[x], y=[y + label_offset], text=[node],
+                mode="text", textfont=dict(size=14), showlegend=False, hoverinfo="skip"
             ))
 
-        if node in foglie:
-            path_csv = os.path.join(soft_evidence_dir, f"soft_evidence_{node}.csv")
-            if os.path.exists(path_csv):
-                df_soft = pd.read_csv(path_csv)
-                row_soft = df_soft[(df_soft["Date"] == date) & (df_soft["Context"] == int(context))]
-                if not row_soft.empty:
-                    thermal = bool(row_soft.iloc[0]["thermal_sensitive"])
-                    color = "green" if thermal else "red"
-                    name = "Thermal sensitive" if thermal else "Non thermal sensitive"
-                    fig.add_trace(go.Scatter(
-                        x=[x], y=[y + label_offset - 0.3],
-                        mode="markers",
-                        marker=dict(color=color, size=10),
-                        name=name,
-                        showlegend=False,
-                        hovertemplate=f"{name}<extra></extra>"
-                    ))
+    # Leaf node markers: thermal sensitive = green, otherwise red
+    for node in foglie:
+        if node in positions:
+            x, y = positions[node]
+            if node in thermal_sensitive_nodes:
+                color = "green"
+                name = "Thermal sensitive"
+            else:
+                color = "red"
+                name = "Non thermal sensitive"
 
+            fig.add_trace(go.Scatter(
+                x=[x], y=[y + label_offset - 0.5],
+                mode="markers",
+                marker=dict(color=color, size=10),
+                name=name,
+                showlegend=False,
+                hovertemplate=f"{name}<extra></extra>"
+            ))
+
+    # Add edges (lines between nodes)
     for parent, (x1, y1) in positions.items():
         children = get_children_of_node(tree, parent)
         for child in children:
             if child in positions:
                 x0, y0 = positions[child]
-                p0 = row.get(f"P({child}=0)", 0)
-                p1 = row.get(f"P({child}=1)", 0)
-                max_bar_height = max(p0, p1) * bar_height_scale
+                p0 = row.get(f"P({child}=0)", None)
+                p1 = row.get(f"P({child}=1)", None)
+                if p0 is not None and p1 is not None and not (np.isnan(p0) or np.isnan(p1)):
+                    max_bar_height = max(p0, p1) * bar_height_scale
+                    line_dash = "solid"
+                else:
+                    max_bar_height = 0
+                    line_dash = "dash"
+
                 y_start = y0 + max_bar_height + arrow_start_offset
                 y_end = y1 + label_offset - arrow_end_offset
+
                 fig.add_trace(go.Scatter(
                     x=[x0, x1], y=[y_start, y_end],
                     mode="lines",
-                    line=dict(color="gray", width=1),
+                    line=dict(color="gray", width=1, dash=line_dash),
                     hoverinfo='skip',
                     showlegend=False
                 ))
@@ -146,11 +152,12 @@ def plot_inference_result(case_study, date, context):
             yanchor="bottom",
             y=-0.05,
             xanchor="center",
-            x=0.5
+            x=0.5,
+            font=dict(size=14)
         )
     )
 
     fig.show()
 
 if __name__ == "__main__":
-    plot_inference_result(case_study="Cabina", date="2025-03-05", context=2)
+    plot_inference_result(case_study="Total_cut", date="2024-08-26", context=2)

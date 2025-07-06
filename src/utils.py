@@ -487,7 +487,7 @@ def run_energy_temp_profile(case_study: str, sottocarico: str, context: int, clu
                 "Cluster": cluster,
                 "temp": row["Temperatura Esterna"],
                 "temp_mean": round(temp_mean, 3),
-                "Energy": row["Power"] * 0.25 / 1000
+                "Energy": row["Power"] * 0.25
             })
 
     df_full = pd.DataFrame(records)
@@ -496,12 +496,6 @@ def run_energy_temp_profile(case_study: str, sottocarico: str, context: int, clu
     df_full["anm"] = df_full.apply(lambda row: ((df_anm.index == row["Date"]) & (df_anm["Context"] == row["Context"])).any(), axis=1)
     df_anomalies = df_full[df_full["anm"]].copy()
     df_normals = df_full[~df_full["anm"]].copy()
-
-    # df_anomalies.drop(columns=["anm", "Date"], inplace=True)
-    # df_normals.drop(columns=["anm", "Date"], inplace=True)
-    #
-    # df_anomalies.set_index(df_anomalies.columns[0], inplace=True)
-    # df_normals.set_index(df_normals.columns[0], inplace=True)
 
     return df_normals, df_anomalies
 
@@ -536,6 +530,26 @@ def scale_data(X, method):
     else:
         raise ValueError(f"Metodo di normalizzazione non supportato: '{method}'")
 
+def assign_values_by_depth(tree: dict) -> dict:
+        value_map = {0: 0.8, 1: 0.7, 2: 0.6, 3: 0.5}
+        def get_depth(node):
+            if not isinstance(node, dict) or not node:
+                return 0
+            return 1 + max(get_depth(sub) for sub in node.values())
+        def traverse(node, result):
+            for key, sub_node in node.items():
+                depth = get_depth(sub_node)
+                if depth >= 4:
+                    value = 0.3
+                else:
+                    value = value_map[depth]
+                result[key] = value
+                if isinstance(sub_node, dict):
+                    traverse(sub_node, result)
+
+        result = {}
+        traverse(tree, result)
+        return result
 
 if __name__ == "__main__":
     df = run_energy_in_tw("Cabina", "QE Pompe")
