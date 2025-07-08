@@ -9,7 +9,7 @@ from xgboost import XGBRegressor, Booster
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from src.utils import run_energy_temp, run_energy_temp_profile, get_nodes_by_level, assign_values_by_depth, find_leaf_nodes
+from src.utils import run_energy_temp, run_energy_temp_profile, assign_values_by_depth, find_leaf_nodes
 from settings import PROJECT_ROOT
 
 def run_dataset(case_study: str):
@@ -32,9 +32,8 @@ def run_dataset(case_study: str):
 
     soglie_per_leaf = assign_values_by_depth(config["Load Tree"])
 
-    levels = get_nodes_by_level(config["Load Tree"])
-    all_nodes = [node for level in levels for node in level]
-    for leaf in all_nodes:
+    leaves = find_leaf_nodes(config["Load Tree"])
+    for leaf in leaves:
         soglia_split = soglie_per_leaf.get(leaf)
         print(f"{leaf} (train-val split threshold {soglia_split*100}%)...   ", end="")
 
@@ -114,9 +113,8 @@ def run_model(case_study: str):
     metrics_results = []
     scaling_info = []
 
-    levels = get_nodes_by_level(config["Load Tree"])
-    all_nodes = [node for level in levels for node in level]
-    for leaf in all_nodes:
+    leaves = find_leaf_nodes(config["Load Tree"])
+    for leaf in leaves:
         df_train_path = os.path.join(train_dir, f"df_train_{leaf}.csv")
         df_train = pd.read_csv(df_train_path, parse_dates=["Date"])
         if 'Date' in df_train.columns:
@@ -162,8 +160,8 @@ def run_model(case_study: str):
         #PLOT ACT VS PRED
         y_pred_rescaled = min_max_scaling(y_preds_all, reverse=True, min_val=y_min, max_val=y_max)
         y_true_rescaled = min_max_scaling(y, reverse=True, min_val=y_min, max_val=y_max)
-        color_map = plt.colormaps["tab20"].resampled(len(all_nodes))
-        leaf_idx = all_nodes.index(leaf)
+        color_map = plt.colormaps["tab20"].resampled(len(leaves))
+        leaf_idx = leaves.index(leaf)
         leaf_color = color_map(leaf_idx)
         plt.figure(figsize=(6, 6))
         plt.grid(True, linewidth=0.5, alpha=0.4)
@@ -263,7 +261,7 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
     print(f"🔮 Importing model_{leaf}...   ", end="")
     print(f"Predicted profile (kWh): {pred_profile}")
 
-
+    energy = round(np.sum(np.array(real_profile)), 2)
     profile_difference = np.array(real_profile) - np.array(pred_profile)
     profile_difference = profile_difference[profile_difference > 0]
     difference = round(np.sum(profile_difference), 2) # differenza punto a punto misura quando è maggiore, ignorando quando pred>real
@@ -375,7 +373,7 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
         plt.tight_layout()
         plt.show()
 
-    return difference
+    return difference, energy
 
 def calc_wasted_energy(case_study: str, method: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
@@ -441,12 +439,12 @@ def calc_wasted_energy(case_study: str, method: str):
 
 if __name__ == "__main__":
     case_study = "Total_cut"
-    # run_dataset(case_study)
-    # run_model(case_study)
-    run_profile(case_study, "GF4", "2024-08-04", 1, "train",
-                True,
-                False,
-                True,
-                True)
+    run_dataset(case_study)
+    run_model(case_study)
+    # run_profile(case_study, "GF4", "2024-08-04", 1, "train",
+    #             True,
+    #             False,
+    #             True,
+    #             True)
     # calc_wasted_energy(case_study, "CMP")
 
