@@ -1,0 +1,20 @@
+{
+  "case_study": "Total",
+  "holidays": "IT",
+  "Load Tree": {
+      "Cabina F1": {
+        "Aule P": {
+          "Unlabelled P": {},
+          "Gen QE-CDZ P": {
+            "Rooftop 1": {},
+            "Rooftop 2": {},
+            "Rooftop 3": {},
+            "Rooftop 4": {},
+            "Rooftop 5": {}
+
+        }
+      }
+    }
+  },
+  "Outside Temperature": "Temperatura Esterna"
+}

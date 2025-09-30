@@ -90,7 +90,7 @@ def plot_inference_result(case_study, date, context):
             ))
             fig.add_trace(go.Scatter(
                 x=[x], y=[y + label_offset], text=[node],
-                mode="text", textfont=dict(size=14), showlegend=False, hoverinfo="skip"
+                mode="text", textfont=dict(size=8), showlegend=False, hoverinfo="skip"
             ))
 
     # Leaf node markers: thermal sensitive = green, otherwise red
@@ -160,4 +160,4 @@ def plot_inference_result(case_study, date, context):
     fig.show()
 
 if __name__ == "__main__":
-    plot_inference_result(case_study="Total_cut", date="2024-08-26", context=2)
+    plot_inference_result(case_study="Total_cut", date="2024-07-17", context=2)

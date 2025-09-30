@@ -28,8 +28,7 @@ def run_cmp(case_study: str, groups_and_tw_case_study: str = None):
 
     # Load the data
     load_tree = config["Load Tree"]
-    groups = pd.read_csv(os.path.join(PROJECT_ROOT, "results", group_tw_path, "groups.csv"), index_col=0)
-    groups.index = pd.to_datetime(groups.index)
+    groups = pd.read_csv(os.path.join(PROJECT_ROOT, "results", group_tw_path, "groups.csv"), index_col=0, parse_dates= True)
     time_windows = pd.read_csv(os.path.join(PROJECT_ROOT, "results", group_tw_path, "time_windows.csv"))
 
     def traverse_tree(tree, function, groups, time_windows, results=None, level=0):

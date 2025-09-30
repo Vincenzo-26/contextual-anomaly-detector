@@ -1,16 +1,20 @@
 import datetime
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import os
 
+from settings import PROJECT_ROOT
 from src.cmp.utils import hour_to_dec, dec_to_obs, dec_to_hour
 from src.distancematrix.calculator import AnytimeCalculator
 from src.distancematrix.consumer.contextmanager import GeneralStaticManager
 from src.distancematrix.consumer.contextual_matrix_profile import ContextualMatrixProfile
 from src.distancematrix.generator.euclidean import Euclidean
 from src.cmp.anomaly_detection_functions import anomaly_detection, extract_vector_ad_cmp, extract_vector_ad_energy
+from matplotlib.colors import LinearSegmentedColormap
 
 
-def cmp_calculation(data: pd.DataFrame, groups: pd.DataFrame, time_windows: pd.DataFrame, m_context: float = 1):
+def cmp_calculation(data: pd.DataFrame, groups: pd.DataFrame, time_windows: pd.DataFrame,  plot_path:str = None, m_context: float = 1):
     """
     Execute the CMP calculation. Return the anomaly detection results.
     Args:
@@ -67,8 +71,37 @@ def cmp_calculation(data: pd.DataFrame, groups: pd.DataFrame, time_windows: pd.D
         calc.calculate_columns(print_progress=True)
         print("")
 
-        date_labels = data.index[::obs_per_day].strftime('%Y-%m-%d')
 
+        # plot full distance matrix for context
+        if plot_path:
+            os.makedirs(plot_path, exist_ok=True)
+            full_cmp = cmp.distance_matrix
+            full_cmp[np.isinf(full_cmp)] = 0
+
+            date_labels_plot = data.index[::obs_per_day]
+            month_labels = [d.strftime('%b') for d in date_labels_plot]
+            tick_step = max(len(month_labels) // 12, 1)
+            ticks = list(range(0, len(month_labels), tick_step))
+            tick_labels = [month_labels[i] for i in ticks]
+
+            colors = ["#4682B4", "#FFFFFF", "#FF0000"]
+            cmap = LinearSegmentedColormap.from_list("custom_steelblue_red", colors, N=256)
+
+            plt.figure(figsize=(10, 8))
+            im = plt.imshow(full_cmp, cmap=cmap, interpolation='nearest', aspect='auto')
+            cbar = plt.colorbar(im)
+            cbar.set_label('Distance', fontsize=14)
+            plt.title(f'Context {id_tw + 1}', fontsize=20)
+            plt.tick_params(axis='both', labelsize=14)
+
+            plt.xticks(ticks, tick_labels)
+            plt.yticks(ticks, tick_labels)
+
+            plt.tight_layout()
+            plt.savefig(os.path.join(plot_path, f'full_matrix_ctx{id_tw + 1}.png'), dpi=300)
+            plt.close()
+
+        date_labels = data.index[::obs_per_day].strftime('%Y-%m-%d')
         for id_cluster in range(n_group):
 
             begin_time_group = datetime.datetime.now()
@@ -84,8 +117,20 @@ def cmp_calculation(data: pd.DataFrame, groups: pd.DataFrame, time_windows: pd.D
             group_cmp = cmp.distance_matrix[:, group][group, :]
             # substitute inf with zeros
             group_cmp[group_cmp == np.inf] = 0
-            # get dates
-            group_dates = data.index[::obs_per_day].values[group]
+
+            # plot distance matrix for context and cluster
+            if plot_path:
+
+                colors = ["#4682B4", "#FFFFFF", "#FF0000"]
+                cmap = LinearSegmentedColormap.from_list("custom_steelblue_red", colors, N=256)
+                plt.figure(figsize=(10, 8))
+                im = plt.imshow(group_cmp, cmap=cmap, interpolation='nearest', aspect='auto')
+                cbar = plt.colorbar(im)
+                cbar.set_label('Distance', fontsize = 14)
+                plt.title(f'Context {id_tw + 1} - Cluster {id_cluster + 1}', fontsize=20)
+                plt.tight_layout()
+                plt.tick_params(axis='both', labelsize=14)
+                plt.savefig(os.path.join(plot_path, f'matrix_ctx{id_tw + 1}_clst{id_cluster + 1}.png'),dpi=300)
 
             df_result_context_cluster["Date"] = groups.index
             df_result_context_cluster["cluster"] = group
@@ -139,3 +184,27 @@ def cmp_calculation(data: pd.DataFrame, groups: pd.DataFrame, time_windows: pd.D
                 print(string_anomaly_print)
 
     return anomalies_table_overall
+
+if __name__ == "__main__":
+    case_study = "Total_cut"
+    load = "Total"
+
+    df = pd.read_csv(os.path.join(PROJECT_ROOT, 'data', f'{case_study}', f'{load}.csv'), index_col=0, parse_dates= True)
+    time_windows = pd.read_csv(os.path.join(PROJECT_ROOT, 'results', f'{case_study}', f'time_windows.csv'))
+    groups = pd.read_csv(os.path.join(PROJECT_ROOT, 'results', f'{case_study}', f'groups.csv'), index_col=0, parse_dates= True)
+
+    plot_path = (os.path.join(PROJECT_ROOT, 'results', f'{case_study}', 'viz', 'distance_matrix_CMP'))
+
+    df_dates = set(pd.to_datetime(df.index.date))
+    group_dates = set(pd.to_datetime(groups.index.date))
+
+    common_dates = df_dates & group_dates
+    common_dates = set(d.date() for d in common_dates)
+
+    df_filtered = df[[d.date() in common_dates for d in df.index]].copy()
+    groups_filtered = groups[[d.date() in common_dates for d in groups.index]].copy()
+
+    anomalies_table_overall = cmp_calculation(df_filtered, groups_filtered, time_windows, plot_path)
+
+
+

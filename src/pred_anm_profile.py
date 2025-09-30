@@ -8,6 +8,7 @@ import xgboost as xgb
 from xgboost import XGBRegressor, Booster
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from collections import defaultdict
 
 from src.utils import run_energy_temp, run_energy_temp_profile, assign_values_by_depth, find_leaf_nodes
 from settings import PROJECT_ROOT
@@ -261,7 +262,6 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
     print(f"🔮 Importing model_{leaf}...   ", end="")
     print(f"Predicted profile (kWh): {pred_profile}")
 
-    energy = round(np.sum(np.array(real_profile)), 2)
     profile_difference = np.array(real_profile) - np.array(pred_profile)
     profile_difference = profile_difference[profile_difference > 0]
     difference = round(np.sum(profile_difference), 2) # differenza punto a punto misura quando è maggiore, ignorando quando pred>real
@@ -270,10 +270,10 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
     pred_total = round(sum(pred_profile), 2)
 
     print(f"CMP   -> Anomaly? {df_day_ctx['anm'].iloc[0]}")
-    print(f"BN prob    -> {df_day_ctx['P(Total=1)'].iloc[0] * 100:.2f}%")
+    print(f"BN 'Total' prob    -> {df_day_ctx['P(Total=1)'].iloc[0] * 100:.2f}%")
     print(f"Actual total energy: {real_total} kWh")
     print(f"Predicted total energy: {pred_total} kWh")
-    print(f"Wasted energy: {difference} kWh ♻️")
+    print(f"Wasted energy: {difference} kWh 🗑️")
 
     plt.figure(figsize=(10, 6))
     clt = int(row_input["Cluster"].iloc[0])
@@ -373,56 +373,54 @@ def run_profile(case_study: str, leaf: str, date: str, context: int, which_df: s
         plt.tight_layout()
         plt.show()
 
-    return difference, energy
+    return difference
 
 def calc_wasted_energy(case_study: str, method: str):
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
     wasted_dir = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost")
     df_val_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "val_df")
-    df_train_path = os.path.join(PROJECT_ROOT, "results", case_study, "Pred_XGboost", "train_df")
     anm_table_path = os.path.join(PROJECT_ROOT, "results", case_study, "anomaly_table")
 
-    df_val_total = pd.read_csv(os.path.join(df_val_path, f"df_val_Total.csv")) #già è filtrato con P(total=1)>0.3
-    anm_table_total = pd.read_csv(os.path.join(anm_table_path, f"anomaly_table_Total.csv"))
 
-    if method == "BN":
-        print("Energy waste with Bayesian Network")
-        combs = df_val_total[["Date", "Context"]].drop_duplicates()
-        combs = [tuple(x) for x in combs.to_numpy()]
-    elif method == "CMP":
-        print("Energy waste with CMP")
-        combs = anm_table_total[["Date", "Context"]].drop_duplicates()
-        combs = [tuple(x) for x in combs.to_numpy()]
 
     wasted_results = []
     total_waste = 0
-
+    waste_by_month = defaultdict(float)
+    waste_by_leaf_month = defaultdict(lambda: defaultdict(float))
     leaves = find_leaf_nodes(config["Load Tree"])
     for leaf in leaves:
         print(f"\n🔍 Processing leaf: {leaf}")
-        waste_leaf = 0
-
-        df_leaf_train = pd.read_csv(os.path.join(df_train_path, f"df_train_{leaf}.csv"))
         val_file = os.path.join(df_val_path, f"df_val_{leaf}.csv")
         if not os.path.exists(val_file):
             print(f"⚠️ No anomalies for leaf: {leaf}")
             continue
-        df_leaf_val = pd.read_csv(val_file)
+        df_leaf_val = pd.read_csv(val_file) # già è filtrato con P(total=1)>0.3
+
+        # TODO CAMBIARE CSV SE CONSIDERARE QUELLE DEI NODI FOGLIA
+        anm_table_leaf = pd.read_csv(os.path.join(anm_table_path, f"anomaly_table_{leaf}.csv"))
+
+        if method == "BN":
+            print("Energy waste with Bayesian Network")
+            df_leaf_val["Date"] = pd.to_datetime(df_leaf_val["Date"])
+            df_leaf_val = df_leaf_val[df_leaf_val["Date"].dt.month.isin([6, 7, 8])] #per giugno luglio e agosto
+            combs = df_leaf_val[["Date", "Context"]].drop_duplicates()
+            combs = [tuple(x) for x in combs.to_numpy()]
+        elif method == "CMP":
+            print("Energy waste with CMP")
+            combs = anm_table_leaf[["Date", "Context"]].drop_duplicates()
+            combs = [tuple(x) for x in combs.to_numpy()]
+
+        waste_leaf = 0
 
         for date, context in combs:
-            in_val = not df_leaf_val[(df_leaf_val["Date"] == date) & (df_leaf_val["Context"] == context)].empty
-            in_train = not df_leaf_train[(df_leaf_train["Date"] == date) & (df_leaf_train["Context"] == context)].empty
-
-            if in_val:
-                which_df = "test"
-            elif in_train:
-                which_df = "train"
-            else:
-                continue # caso in cui in quel carico la combinazione Date-Context non ha dati
-            waste = run_profile(case_study, leaf, date, context, which_df, False, False, False)
+            which_df = "test"
+            waste = run_profile(case_study, leaf, date, context, which_df, False, False, False, False)
             print("\n")
             if waste is not None:
+                month_str = pd.to_datetime(date).strftime("%Y-%m")
+                waste_by_month[month_str] += waste
+                waste_by_leaf_month[leaf][month_str] += waste
                 waste_leaf += waste
                 total_waste += waste
 
@@ -434,17 +432,28 @@ def calc_wasted_energy(case_study: str, method: str):
     save_path = os.path.join(wasted_dir, f"wasted_energy_summary_{method}.csv")
     df_result.to_csv(save_path, index=False)
     print(f"\n✅ Saved summary to: {save_path}")
+    df_monthly = pd.DataFrame(list(waste_by_month.items()), columns=["Month", "Wasted energy [kWh]"])
+    df_monthly["%"] = df_monthly["Wasted energy [kWh]"] / total_waste * 100
+    df_monthly["%"] = df_monthly["%"].round(2)
+
+    monthly_path = os.path.join(wasted_dir, f"wasted_energy_monthly_{method}.csv")
+    df_monthly.to_csv(monthly_path, index=False)
+    df_pivot = pd.DataFrame(waste_by_leaf_month).fillna(0).T
+    pivot_path = os.path.join(wasted_dir, f"wasted_energy_by_leaf_month_{method}.csv")
+    df_pivot.to_csv(pivot_path)
+    print(f"📊 Saved matrix leaf × month to: {pivot_path}")
+    print(f"📅 Saved monthly summary to: {monthly_path}")
     print(f"\n✅ Total wasted energy: {total_waste}")
 
 
 if __name__ == "__main__":
     case_study = "Total_cut"
-    run_dataset(case_study)
-    run_model(case_study)
+    # run_dataset(case_study)
+    # run_model(case_study)
     # run_profile(case_study, "GF4", "2024-08-04", 1, "train",
     #             True,
     #             False,
     #             True,
     #             True)
-    # calc_wasted_energy(case_study, "CMP")
+    calc_wasted_energy(case_study, "BN")
 
