@@ -19,20 +19,29 @@ from src.utils import print_boxed_title, find_leaf_nodes, merge_anomaly_tables, 
 a_priori_0 = 0.9
 a_priori_1 = 0.1
 
-
 def build_BN_structural_model(case_study: str):
     """
-    Costruisce la struttura e i CPD di una rete bayesiana basata sulla struttura del load tree.
-    Per ogni nodo foglia viene assegnata una CPD a priori uniforme [0.9, 0.1] (sostituita in fase di inferenza).
-    Per i nodi interni (padri), i CPD condizionati vengono calcolati a partire dalle frequenze
-    nei dati storici. Alle combinazioni mai osservate viene assegnata 50% - 50%.
+    Builds a structural Bayesian network model based on the load tree of a case study, including the CPDs (Conditional Probability Distributions) calculated from anomaly data.
 
-    Args:
-        case_study (str): Nome del case study.
+    The function:
+    - Loads the case study configuration and extracts nodes and edges from the load tree.
+    - Initializes the Bayesian network model with the obtained edges.
+    - Adds uniform a priori CPDs for the leaf nodes.
+    - Merges the anomaly tables related to the case study.
+    - For each internal node, calculates conditional CPDs based on observed anomaly frequencies relative to its children.
+      Handles cases of unobserved combinations by defining default probabilities.
+    - Saves the calculated CPDs as CSV files for each node.
+    - Returns the complete Bayesian network model with all CPDs added.
 
-    Returns:
-        BayesianNetwork: Oggetto pgmpy BayesianNetwork con struttura e CPD definiti.
+    Input:
+    case_study : str
+        Name of the case study.
+
+    Output:
+    model : BayesianNetwork
+        Structural Bayesian network model with associated CPDs built from the case study.
     """
+
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
@@ -129,9 +138,32 @@ def build_BN_structural_model(case_study: str):
     return model
 
 def run_BN(case_study: str):
+    """
+    Performs inference on a structural Bayesian network for a case study,
+    calculating the marginal probabilities of internal nodes based on soft evidence from leaf nodes.
+
+    The function:
+    - Loads the configuration and identifies leaf and internal nodes of the load tree.
+    - Builds the structural model of the Bayesian network.
+    - Loads the soft evidence for each leaf node.
+    - For each combination of date, context, and cluster, performs inference with virtual evidence
+      to calculate the marginal probabilities of internal nodes.
+    - Merges the results with information on thermal sensitivity and anomalies.
+    - Sorts and saves the results in a CSV file within the case study results folder.
+    - Returns a DataFrame containing all inferred probabilities and associated states.
+
+    Input:
+    case_study : str
+        Name of the case study.
+
+    Output:
+    df_result : pandas.DataFrame
+        DataFrame containing the marginal probabilities of each internal node, soft evidence for leaf nodes,
+        anomalies, and thermal sensitivity for each combination of date, context, and cluster.
+    """
+
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
-
 
     levels = get_nodes_by_level(config["Load Tree"])
     foglie = find_leaf_nodes(config["Load Tree"])
@@ -241,67 +273,33 @@ def run_BN(case_study: str):
 
     return df_result
 
-def generate_barplots_from_cpds(case_study: str):
-    """
-    Genera barplot con larghezza uniforme e colori pastello per ogni CPD.
-    Tutti i grafici hanno lo stesso numero di barre (paddate con 0 se necessario),
-    così da mantenere una larghezza costante delle colonne.
-    """
-    input_dir = os.path.join(PROJECT_ROOT, "results", case_study, "CPDs")
-    output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "viz", "CPDs")
-    os.makedirs(output_dir, exist_ok=True)
-
-    pastel_colors = plt.get_cmap('Pastel1')
-    file_list = sorted([f for f in os.listdir(input_dir) if f.endswith(".csv")])
-    n_files = len(file_list)
-
-    # numero massimo di colonne per averle della stessa larghezza tra i plot
-    n_max = 0
-    for filename in file_list:
-        df_tmp = pd.read_csv(os.path.join(input_dir, filename))
-        n_cols = len(df_tmp.columns) - 3  # esclusiuone di P=1 e P=0 e observed dalle colonne
-        n_max = max(n_max, n_cols)
-
-    # Step 2: genera i barplot
-    for idx, filename in enumerate(file_list):
-        filepath = os.path.join(input_dir, filename)
-        df = pd.read_csv(filepath)
-
-        node_name = filename.replace("cpd_", "").replace(".csv", "")
-        prob_col = f"P({node_name}=1)"
-        input_cols = df.columns[:-3]
-
-        bar_labels = []
-        bar_values = []
-
-        for col in input_cols:
-            mask = (df[col] == 1)
-            for other_col in input_cols:
-                if other_col != col:
-                    mask &= (df[other_col] == 0)
-            value = df.loc[mask, prob_col].values[0] * 100 if mask.any() else 0
-            bar_labels.append(col)
-            bar_values.append(value)
-
-        bar_labels += [''] * (n_max - len(bar_labels))
-        bar_values += [0] * (n_max - len(bar_values))
-        bar_pos = np.arange(n_max)
-
-        plt.figure(figsize=(8, 8))
-        plt.bar(bar_pos, bar_values, color=pastel_colors(idx % 8))
-        plt.xticks(bar_pos, bar_labels, rotation=45, ha='right', fontsize=18)
-        plt.ylim(0, 100)
-        plt.ylabel(f"P({node_name}=1) [%]", fontsize=18)
-        plt.title(f"{node_name}", fontsize=20)
-        plt.grid(axis='y', linestyle='--', alpha=0.6)
-        plt.yticks(fontsize=18)
-        plt.tight_layout()
-
-        save_path = os.path.join(output_dir, f"barplot_{node_name}.png")
-        plt.savefig(save_path)
-        plt.close()
-
 def export_probabilities_for_date(case_study: str, date: str, context: int):
+    """
+    Exports the marginal probabilities and soft evidence of each node in the Bayesian network
+    for a specific date and context, saving them in a CSV file.
+
+    The function:
+    - Loads inference results for the case study, the configuration, and the leaf nodes.
+    - Filters data based on the specified date and context.
+    - For each node, extracts the probabilities of state 0 and state 1, handling missing values
+      with prior probabilities.
+    - Determines the type of probability (Prior, Soft evidence, or Marginal) based on the presence
+      of soft evidence and whether the node is a leaf or internal.
+    - Prepares a DataFrame with loads, type, and rounded probabilities, then saves it as a CSV.
+
+    Input:
+    case_study : str
+        Name of the case study from which to extract data.
+    date : str
+        The date for which to export the probabilities.
+    context : int
+        Identifier of the context for the probability selection.
+
+    Output:
+    Saves a CSV file containing the probabilities for each node in the path
+    results/<case_study>/inference_on_date&ctx.
+    """
+
     results_path = os.path.join(PROJECT_ROOT, "results", case_study, "inference_results.csv")
     soft_evidence_dir = os.path.join(PROJECT_ROOT, "results", case_study, "soft_evidences")
     output_dir = os.path.join(PROJECT_ROOT, "results", case_study, "inference_on_date&ctx")
@@ -359,58 +357,7 @@ def export_probabilities_for_date(case_study: str, date: str, context: int):
     df_out.to_csv(output_path, index=False)
     print(f"\033[92mEsportato CSV: {output_path}\033[0m")
 
-def cmp_vs_tool(case_study: str):
-    with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
-        config = json.load(f)
-    inference_path = os.path.join(PROJECT_ROOT, "results", case_study, "inference_results.csv")
-    anomaly_table_path = os.path.join(PROJECT_ROOT, "results", case_study, "anomaly_table")
-    summary_path =  os.path.join(PROJECT_ROOT, "results", case_study)
-
-    inference_df = pd.read_csv(inference_path)
-    threshold_dict = assign_values_by_depth(config['Load Tree'])
-
-    results = []
-
-    levels = get_nodes_by_level(config["Load Tree"])
-    all_nodes = [node for level in levels for node in level]
-    for node in all_nodes:
-        anomaly_table_node = pd.read_csv(os.path.join(anomaly_table_path, f"anomaly_table_{node}.csv"))
-        threshold = threshold_dict[node]
-
-        n_cmp = len(anomaly_table_node)
-
-        inference_high = inference_df[inference_df[f'P({node}=1)'] >= threshold]
-        n_inference_high = len(inference_high)
-
-        anomaly_pairs = set(zip(anomaly_table_node["Date"], anomaly_table_node["Context"]))
-        inference_high_pairs = set(zip(inference_high["Date"], inference_high["Context"]))
-        n_common = len(anomaly_pairs & inference_high_pairs)
-
-        # Calcolo variazione percentuale
-        if n_cmp == 0:
-            change = float('inf') if n_inference_high > 0 else 0
-        else:
-            change = round((n_inference_high - n_cmp) / n_cmp * 100, 2)
-
-        results.append({
-            "Load": node,
-            "Threshold": threshold * 100,
-            "CMP": n_cmp,
-            "Proposed Approach": n_inference_high,
-            "Common Anomalies": n_common,
-            "Detection Shift": f"{change:.2f}%" if change != float('inf') else "-"
-        })
-
-    df_summary = pd.DataFrame(results)
-    df_summary["Threshold"] = df_summary["Threshold"].map(lambda x: f"{x:.0f}%")
-    df_summary.to_csv(os.path.join(summary_path, "cmp_vs_tool_summary.csv"), index=False)
-    return df_summary
-
-
-
 if __name__ == "__main__":
-    case_study = "Total_cut"
-    # df = run_BN(case_study)
-    # generate_barplots_from_cpds(case_study)
+    case_study = "Total"
+    df = run_BN(case_study)
     # export_probabilities_for_date(case_study, "2024-07-21", 3)
-    cmp_vs_tool(case_study)

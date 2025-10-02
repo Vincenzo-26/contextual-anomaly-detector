@@ -49,4 +49,4 @@ def run_groups_and_tw(case_study: str):
 
 
 if __name__ == "__main__":
-    run_groups_and_tw("Total_cut")
+    run_groups_and_tw("Total")

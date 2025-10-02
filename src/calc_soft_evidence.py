@@ -5,15 +5,27 @@ import pandas as pd
 from utils import print_boxed_title, find_leaf_nodes
 from settings import PROJECT_ROOT
 
-
-def tempered_soft_or(row):
-    if row["thermal_sensitive"]:
-        return row["temp_anomaly_prob"]
-    else:
-        return row["energy_anomaly_prob"]
-
-
 def combine_soft_evidence(case_study: str):
+    """
+    Combina le probabilità di anomalia derivate dall'analisi energetica e da quella termica
+    per ciascuna foglia del load tree, producendo le soft evidences necessarie
+    per l'inferenza bayesiana.
+
+    Per ogni nodo foglia:
+      - carica le evidenze energetiche stimate con logistic regression (file CSV);
+      - verifica la presenza dei risultati di sensibilità termica;
+      - se non disponibili, mantiene solo le anomalie energetiche e marca il nodo come non termicamente sensibile;
+      - se disponibili, unisce le due fonti (energia e temperatura) sulle chiavi [Date, Context, Cluster];
+      - calcola la colonna "anomaly_prob" scegliendo tra probabilità termica e probabilità energetica
+        a seconda della sensibilità termica del nodo;
+      - salva il file CSV finale nella cartella `soft_evidences`.
+
+    Args:
+        case_study (str): Nome del caso di studio (cartella contenente dati, configurazioni e risultati).
+
+    Returns:
+        None: I risultati vengono salvati su disco come file CSV, uno per ciascun nodo foglia.
+    """
     with open(os.path.join(PROJECT_ROOT, "data", case_study, "config.json"), "r") as f:
         config = json.load(f)
 
@@ -50,7 +62,10 @@ def combine_soft_evidence(case_study: str):
         df_merged = df_energy.merge(df_temp, on=["Date", "Context", "Cluster"], how="left")
         df_merged["thermal_sensitive"] = df_merged["temp_anomaly_prob"].notna()
 
-        df_merged["anomaly_prob"] = df_merged.apply(lambda row: tempered_soft_or(row), axis=1)
+        df_merged["anomaly_prob"] = df_merged.apply(
+            lambda row: row["temp_anomaly_prob"] if row["thermal_sensitive"] else row["energy_anomaly_prob"],
+            axis=1
+        )
 
         ordered_cols = ["Date", "Context", "Cluster", "Energy", "Temperature", "energy_anomaly_prob", "temp_anomaly_prob",
                          "anomaly_prob", "is_real_anomaly", "thermal_sensitive"]
@@ -62,7 +77,7 @@ def combine_soft_evidence(case_study: str):
     print("\nAnomaly probabilities calculated ✅     -> ready for bayesian inference\n\n")
 
 if __name__ == "__main__":
-    combine_soft_evidence("Total_cut")
+    combine_soft_evidence("Total")
 
 
 

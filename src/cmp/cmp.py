@@ -186,7 +186,7 @@ def cmp_calculation(data: pd.DataFrame, groups: pd.DataFrame, time_windows: pd.D
     return anomalies_table_overall
 
 if __name__ == "__main__":
-    case_study = "Total_cut"
+    case_study = "Total"
     load = "Total"
 
     df = pd.read_csv(os.path.join(PROJECT_ROOT, 'data', f'{case_study}', f'{load}.csv'), index_col=0, parse_dates= True)

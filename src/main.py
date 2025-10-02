@@ -6,11 +6,11 @@ from find_groups_and_tw import run_groups_and_tw
 from cmp_calculation import run_cmp
 from prepare_case_study_data import run_data
 from bayesian_network import run_BN
-from calc_energy_anm import run_soft_evd_LR
+from non_thermal_sens_node_anm import run_soft_evd_LR
 from utils import *
-from calc_daily_thermal_sens import find_thermal_sens
+from check_node_thermal_sens import find_thermal_sens
 from calc_soft_evidence import combine_soft_evidence
-from calc_temp_anm import calc_temp_anm_prob
+from thermal_sens_node_anm import calc_temp_anm_prob
 
 start_time = time.time()
 start_readable = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -9,18 +9,24 @@ from src.cmp.utils import extract_holidays
 
 def run_data(case_study: str):
     """
-    Per ogni nodo del load tree del caso studio:
-      - carica i dati grezzi dal file CSV corrispondente;
-      - esegue la pulizia della serie temporale (vedi funzione clean_time_series in utils.py);
-      - identifica l’intervallo temporale comune a tutti i nodi validi;
-      - riallinea le serie temporali su una griglia di tempo comune (frequenza 15 minuti);
-      - salva i dati puliti e allineati in file CSV nella directory di output.
+    Esegue il preprocessing dei dati grezzi di un caso studio, pulendo e ricostruendo le serie temporali
+    di ciascun nodo del load tree e della temperatura esterna.
+
+    Per ogni nodo:
+      - carica la serie temporale grezza dal file CSV;
+      - applica la funzione `clean_time_series`;
+      - salva la serie temporale pulita in `data/<case_study>/`.
+
+    Inoltre:
+      - esegue la stessa procedura per la temperatura esterna;
+      - raccoglie statistiche sul preprocessing (giorni completi, interpolati, ricostruiti con KNN, rimossi);
+      - salva un riepilogo globale in `results/<case_study>/summary_preprocessing.csv`.
 
     Args:
-        case_study (str): Nome del caso studio (corrispondente alla sottocartella all’interno di `raw_data/`).
+        case_study (str): Nome del caso studio.
 
     Returns:
-        None
+        None: I risultati sono salvati su disco (serie pulite e riepilogo delle statistiche).
     """
     print_boxed_title("Preprocessing & Alignment 🧹📊")
 
@@ -42,7 +48,6 @@ def run_data(case_study: str):
         print(f"\n🔧 Processing {node}")
         df_node_raw = pd.read_csv(os.path.join(PROJECT_ROOT, "raw_data", case_study, f"{node}.csv"))
         df_node_clean, node_stats = clean_time_series(df_node_raw)
-
 
         df_node_clean.to_csv(os.path.join(output_dir, f"{node}.csv"), index=False)
         summary = node_stats["summary"]

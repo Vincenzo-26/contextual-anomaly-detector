@@ -72,4 +72,4 @@ def run_cmp(case_study: str, groups_and_tw_case_study: str = None):
 
 
 if __name__ == "__main__":
-    run_cmp("Total_cut")
+    run_cmp("Total")
