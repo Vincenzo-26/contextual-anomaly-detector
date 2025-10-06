@@ -538,7 +538,7 @@ if __name__ == "__main__":
     case_study = "Total"
     # run_dataset(case_study)
     # run_model(case_study)
-    run_profile(case_study, "GF4", "2024-08-04", 1, "train",
+    run_profile(case_study, "Rooftop 1", "2024-10-09", 3, "train",
                 True,
                 True,
                 True,

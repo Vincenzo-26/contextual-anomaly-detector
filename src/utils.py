@@ -487,17 +487,22 @@ def run_energy_temp_profile(case_study: str, sottocarico: str, context: int, clu
                 "Cluster": cluster,
                 "temp": row["Temperatura Esterna"],
                 "temp_mean": round(temp_mean, 3),
-                "Energy": row["Power"] * 0.25
+                "Energy": round(row["Power"] * 0.25, 4)
             })
+
 
     df_full = pd.DataFrame(records)
     df_full["Date"] = pd.to_datetime(df_full["Date"])
+
+    df_full = df_full.sort_values(by=["Date", "ora", "quartodora"]).reset_index(drop=True)
+    df_full["cumulative_en"] = df_full.groupby(["Date", "Context"])["Energy"].cumsum()
 
     df_full["anm"] = df_full.apply(lambda row: ((df_anm.index == row["Date"]) & (df_anm["Context"] == row["Context"])).any(), axis=1)
     df_anomalies = df_full[df_full["anm"]].copy()
     df_normals = df_full[~df_full["anm"]].copy()
 
     return df_normals, df_anomalies
+
 
 def get_nodes_by_level(load_tree: dict) -> list[list[str]]:
     from collections import defaultdict, deque
